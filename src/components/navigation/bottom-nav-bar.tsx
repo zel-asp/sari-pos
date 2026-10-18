@@ -7,100 +7,12 @@ interface BottomNavBarProps {
   activeTab: 'dashboard' | 'pos' | 'utang' | 'inventory';
 }
 
-export function BottomNavBar({ activeTab }: BottomNavBarProps) {
-  return (
-    <View style={styles.navContainer}>
-      {/* 1. Dashboard Tab */}
-      <Pressable
-        onPress={() => {
-          if (activeTab !== 'dashboard') router.replace('/');
-        }}
-        style={styles.navItem}
-      >
-        <FontAwesome5
-          name="store"
-          size={18}
-          color={activeTab === 'dashboard' ? '#059669' : '#94a3b8'}
-        />
-        <Text
-          style={[
-            styles.navLabel,
-            activeTab === 'dashboard' && styles.navLabelActive,
-          ]}
-        >
-          Dashboard
-        </Text>
-      </Pressable>
-
-      {/* 2. POS / Sell (Export) Tab */}
-      <Pressable
-        onPress={() => {
-          if (activeTab !== 'pos') router.push('/pos');
-        }}
-        style={styles.navItem}
-      >
-        <View style={activeTab === 'pos' ? styles.activeIconWrap : undefined}>
-          <FontAwesome5
-            name="cash-register"
-            size={18}
-            color={activeTab === 'pos' ? '#059669' : '#94a3b8'}
-          />
-        </View>
-        <Text
-          style={[
-            styles.navLabel,
-            activeTab === 'pos' && styles.navLabelActive,
-          ]}
-        >
-          Sell (Export)
-        </Text>
-      </Pressable>
-
-      {/* 3. Customer Utang Tab */}
-      <Pressable
-        onPress={() => {
-          if (activeTab !== 'utang') router.push('/utang/index');
-        }}
-        style={styles.navItem}
-      >
-        <FontAwesome5
-          name="book-open"
-          size={18}
-          color={activeTab === 'utang' ? '#059669' : '#94a3b8'}
-        />
-        <Text
-          style={[
-            styles.navLabel,
-            activeTab === 'utang' && styles.navLabelActive,
-          ]}
-        >
-          Utang
-        </Text>
-      </Pressable>
-
-      {/* 4. Inventory Tab */}
-      <Pressable
-        onPress={() => {
-          if (activeTab !== 'inventory') router.push('/inventory');
-        }}
-        style={styles.navItem}
-      >
-        <FontAwesome5
-          name="boxes"
-          size={18}
-          color={activeTab === 'inventory' ? '#059669' : '#94a3b8'}
-        />
-        <Text
-          style={[
-            styles.navLabel,
-            activeTab === 'inventory' && styles.navLabelActive,
-          ]}
-        >
-          Inventory
-        </Text>
-      </Pressable>
-    </View>
-  );
+/**
+ * @deprecated Replaced by AppLayout (Menu bar on mobile, sidebar on large screens).
+ * Renders null so no lower navigation bar ever appears.
+ */
+export function BottomNavBar(_props: BottomNavBarProps) {
+  return null;
 }
 
 const styles = StyleSheet.create({

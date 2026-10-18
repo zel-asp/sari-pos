@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,25 +10,26 @@ import {
   StyleSheet,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
 import { FontAwesome, FontAwesome5 } from '@expo/vector-icons';
 import { useToast } from '@/components/ui/toast';
 import { AppButton } from '@/components/ui/app-button';
-import { BottomNavBar } from '@/components/navigation/bottom-nav-bar';
+import { AppLayout } from '@/components/navigation/app-layout';
+import { Pagination } from '@/components/ui/pagination';
 import { useProducts } from '@/hooks/use-products';
 import { ProductCard } from '@/components/products/product-card';
 import { formatPHP } from '@/utils/currency';
-import { seedDemoProducts } from '@/database';
 
 type StatusFilter = 'all' | 'low_stock' | 'out_of_stock';
 
+const PAGE_SIZE = 15;
+
 export default function InventoryScreen() {
-  const db = useSQLiteContext();
-  const { products, categories, loading, refresh } = useProducts();
+  const { products, categories, loading, refresh, realtimePulse } = useProducts();
 
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [page, setPage] = useState(1);
   const [seeding, setSeeding] = useState(false);
 
   // Compute summary stats
@@ -82,28 +83,35 @@ export default function InventoryScreen() {
     });
   }, [products, search, selectedCategory, statusFilter]);
 
+  // Reset page when filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [search, selectedCategory, statusFilter]);
+
+  // Paginate products (15 per page)
+  const paginatedProducts = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filteredProducts.slice(start, start + PAGE_SIZE);
+  }, [filteredProducts, page]);
+
   const toast = useToast();
 
-  const handleSeedSampleData = async () => {
-    try {
-      setSeeding(true);
-      await seedDemoProducts(db);
-      await refresh();
-      toast.success('Sample Data Loaded!', 'Demo sari-sari store products loaded into SQLite.');
-    } catch (err) {
-      toast.error('Failed to Seed Data', err instanceof Error ? err.message : 'Database error occurred.');
-    } finally {
-      setSeeding(false);
-    }
-  };
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: 'Inventory & Products',
-          headerShown: true,
-          headerRight: () => (
+      <Stack.Screen options={{ headerShown: false }} />
+      <AppLayout
+        activeTab="inventory"
+        title="Inventory & Products"
+        headerRight={
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Pressable
+              onPress={() => router.push('/stock-history')}
+              style={styles.headerHistoryButton}
+            >
+              <FontAwesome5 name="history" size={11} color="#059669" style={{ marginRight: 4 }} />
+              <Text style={styles.headerHistoryButtonText}>History</Text>
+            </Pressable>
             <Pressable
               onPress={() => router.push('/products/new')}
               style={styles.headerButton}
@@ -111,15 +119,23 @@ export default function InventoryScreen() {
               <FontAwesome5 name="plus" size={10} color="#ffffff" style={{ marginRight: 5 }} />
               <Text style={styles.headerButtonText}>Add Product</Text>
             </Pressable>
-          ),
-        }}
-      />
-      <View style={styles.container}>
+          </View>
+        }
+      >
+        <View style={styles.container}>
         {/* Top Summary Bar */}
         <View style={styles.summaryBar}>
           <View style={styles.summaryTopRow}>
             <View>
-              <Text style={styles.valuationLabel}>Inventory Valuation (Cost)</Text>
+              <View style={styles.liveBadgeRow}>
+                <Text style={styles.valuationLabel}>Inventory Valuation (Cost)</Text>
+                <View style={[styles.realtimePill, realtimePulse && styles.realtimePillPulsing]}>
+                  <View style={[styles.realtimeDot, realtimePulse && styles.realtimeDotPulsing]} />
+                  <Text style={[styles.realtimeText, realtimePulse && styles.realtimeTextPulsing]}>
+                    {realtimePulse ? 'Updated live' : 'Realtime'}
+                  </Text>
+                </View>
+              </View>
               <Text style={styles.valuationValue}>{formatPHP(stats.totalValuation)}</Text>
             </View>
             <View style={styles.countPillsRow}>
@@ -291,17 +307,6 @@ export default function InventoryScreen() {
                   title="Add New Product"
                   icon={<FontAwesome5 name="plus" size={12} color="#ffffff" />}
                   size="md"
-                  style={{ width: '100%', marginBottom: 10 }}
-                />
-
-                <AppButton
-                  onPress={handleSeedSampleData}
-                  title="Load Sample Sari-Sari Products"
-                  loading={seeding}
-                  loadingText="Loading sample products..."
-                  variant="secondary"
-                  icon={<FontAwesome5 name="bolt" size={12} color="#059669" />}
-                  size="md"
                   style={{ width: '100%' }}
                 />
               </View>
@@ -329,12 +334,21 @@ export default function InventoryScreen() {
           </View>
         ) : (
           <FlatList
-            data={filteredProducts}
+            data={paginatedProducts}
             keyExtractor={(item) => item.id.toString()}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
               <RefreshControl refreshing={loading} onRefresh={refresh} colors={['#059669']} />
+            }
+            ListFooterComponent={
+              <Pagination
+                currentPage={page}
+                totalItems={filteredProducts.length}
+                pageSize={PAGE_SIZE}
+                onPageChange={(p) => setPage(p)}
+                itemName="products"
+              />
             }
             renderItem={({ item }) => (
               <ProductCard
@@ -355,8 +369,8 @@ export default function InventoryScreen() {
             )}
           />
         )}
-        <BottomNavBar activeTab="inventory" />
-      </View>
+        </View>
+      </AppLayout>
     </>
   );
 }
@@ -366,6 +380,22 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f1f5f9',
   },
+  headerHistoryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 12,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  headerHistoryButtonText: {
+    color: '#059669',
+    fontWeight: '700',
+    fontSize: 12,
+  },
   headerButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -373,7 +403,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 12,
-    marginRight: 8,
   },
   headerButtonText: {
     color: '#ffffff',
@@ -396,6 +425,46 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  liveBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 2,
+  },
+  realtimePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  realtimePillPulsing: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#4ade80',
+  },
+  realtimeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+    marginRight: 4,
+  },
+  realtimeDotPulsing: {
+    backgroundColor: '#059669',
+  },
+  realtimeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#059669',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  realtimeTextPulsing: {
+    color: '#047857',
   },
   valuationLabel: {
     fontSize: 11,

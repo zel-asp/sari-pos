@@ -8,16 +8,24 @@ import {
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
+  ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
-import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
+import { FontAwesome5, FontAwesome, Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useToast } from '@/components/ui/toast';
 import { AppButton } from '@/components/ui/app-button';
 import { BarcodeScannerModal } from '@/components/camera/barcode-scanner-modal';
+import { ReceiptReviewModal } from '@/components/receipt/receipt-review-modal';
 import { ProductRepository } from '@/database/repositories/product-repository';
 import { pesosToCentavos } from '@/utils/currency';
 import { type UnitOfMeasurement } from '@/types/database';
+import {
+  parseReceiptWithGemini,
+  type ReceiptScanResult,
+  type ScannedReceiptItem,
+} from '@/lib/gemini';
 
 const COMMON_UNITS: UnitOfMeasurement[] = [
   'piece',
@@ -44,7 +52,6 @@ const COMMON_CATEGORIES = [
 ];
 
 export default function NewProductScreen() {
-  const db = useSQLiteContext();
   const params = useLocalSearchParams<{ barcode?: string }>();
 
   const toast = useToast();
@@ -60,6 +67,125 @@ export default function NewProductScreen() {
   const [minStockStr, setMinStockStr] = useState('5');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+
+  // Receipt Scanner states
+  const [isScanningReceipt, setIsScanningReceipt] = useState(false);
+  const [receiptScanResult, setReceiptScanResult] = useState<ReceiptScanResult | null>(null);
+  const [showReceiptReview, setShowReceiptReview] = useState(false);
+
+  const getBase64FromAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
+    if (asset.base64) {
+      return asset.base64;
+    }
+    const response = await fetch(asset.uri);
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const processReceiptImage = async (asset: ImagePicker.ImagePickerAsset) => {
+    try {
+      setIsScanningReceipt(true);
+      const base64 = await getBase64FromAsset(asset);
+      const mime = asset.mimeType || 'image/jpeg';
+      const result = await parseReceiptWithGemini(base64, mime);
+
+      if (!result.items || result.items.length === 0) {
+        toast.warning(
+          'No Items Found',
+          'Could not detect purchased items in this image. Please ensure the receipt is well-lit and readable.'
+        );
+        return;
+      }
+
+      if (result.items.length === 1) {
+        handleApplySingleItem(result.items[0]);
+        toast.success(
+          'Product Details Auto-Filled!',
+          `Loaded "${result.items[0].name}" (Cost: ₱${result.items[0].costPrice.toFixed(2)}, SRP: ₱${result.items[0].sellingPrice.toFixed(2)}).`
+        );
+        return;
+      }
+
+      setReceiptScanResult(result);
+      setShowReceiptReview(true);
+      toast.success(
+        'Receipt Processed!',
+        `Found ${result.items.length} items from ${result.storeName || 'receipt'}.`
+      );
+    } catch (err) {
+      console.error('[Receipt Scanner Error]', err);
+      toast.error(
+        'Scan Failed',
+        err instanceof Error ? err.message : 'Failed to parse receipt with AI.'
+      );
+    } finally {
+      setIsScanningReceipt(false);
+    }
+  };
+
+  const handleTakeReceiptPhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        toast.error('Camera Permission Denied', 'Camera permission is required to snap receipt photos.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.85,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        await processReceiptImage(result.assets[0]);
+      }
+    } catch (err) {
+      toast.error('Camera Error', 'Could not open camera.');
+    }
+  };
+
+  const handlePickReceiptFile = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.85,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        await processReceiptImage(result.assets[0]);
+      }
+    } catch (err) {
+      toast.error('File Error', 'Could not select image file.');
+    }
+  };
+
+  const handleApplySingleItem = (item: ScannedReceiptItem) => {
+    setName(item.name);
+    setCostPriceStr(item.costPrice ? item.costPrice.toFixed(2) : '');
+    setSellingPriceStr(item.sellingPrice ? item.sellingPrice.toFixed(2) : '');
+    setStockStr(String(item.quantity || 1));
+    if (COMMON_CATEGORIES.includes(item.category)) {
+      setCategory(item.category);
+    } else {
+      setCategory('Other');
+      setCustomCategory(item.category);
+    }
+    if (COMMON_UNITS.includes(item.unit as UnitOfMeasurement)) {
+      setUnit(item.unit as UnitOfMeasurement);
+    }
+  };
 
   const handleSave = async () => {
     const trimmedName = name.trim();
@@ -109,7 +235,7 @@ export default function NewProductScreen() {
       const stock = parseFloat(stockStr || '0');
       const minStock = parseFloat(minStockStr || '5');
 
-      await ProductRepository.create(db, {
+      await ProductRepository.create({
         name: name.trim(),
         barcode: barcode.trim() || null,
         category: selectedCategory,
@@ -122,7 +248,11 @@ export default function NewProductScreen() {
 
       toast.success('Product Added!', `"${name.trim()}" has been saved to your inventory.`);
       setTimeout(() => {
-        router.back();
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/inventory');
+        }
       }, 700);
     } catch (err) {
       toast.error('Failed to Save', err instanceof Error ? err.message : 'Failed to create product in database.');
@@ -149,6 +279,38 @@ export default function NewProductScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+          {/* AI Receipt Intake Card */}
+          <View style={styles.aiReceiptCard}>
+            <View style={styles.aiReceiptHeader}>
+              <View style={styles.aiIconBubble}>
+                <FontAwesome5 name="magic" size={14} color="#ffffff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.aiReceiptTitle}>AI Receipt Scanner & Auto-Fill</Text>
+                <Text style={styles.aiReceiptSub}>
+                  Take a photo or insert a receipt file to auto-extract items, quantities, and wholesale costs.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.aiReceiptButtonsRow}>
+              <Pressable
+                onPress={handleTakeReceiptPhoto}
+                style={({ pressed }) => [styles.aiActionButton, styles.cameraButton, pressed && { opacity: 0.85 }]}
+              >
+                <FontAwesome5 name="camera" size={13} color="#ffffff" />
+                <Text style={styles.aiActionButtonText}>Take Photo</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={handlePickReceiptFile}
+                style={({ pressed }) => [styles.aiActionButton, styles.uploadButton, pressed && { opacity: 0.85 }]}
+              >
+                <FontAwesome5 name="file-image" size={13} color="#059669" />
+                <Text style={[styles.aiActionButtonText, { color: '#059669' }]}>Insert File</Text>
+              </Pressable>
+            </View>
+          </View>
           {/* Card 1: Product Name */}
           <View style={styles.card}>
             <View style={styles.sectionHeader}>
@@ -160,7 +322,7 @@ export default function NewProductScreen() {
             <TextInput
               value={name}
               onChangeText={setName}
-              placeholder="e.g. Lucky Me! Pancit Canton Kalamansi"
+              placeholder="Enter product name"
               placeholderTextColor="#94a3b8"
               style={styles.input}
               autoFocus={!params.barcode}
@@ -381,6 +543,39 @@ export default function NewProductScreen() {
         }}
         title="Scan Barcode / QR Code"
       />
+
+      {/* AI Receipt Scanning Progress Modal */}
+      <Modal visible={isScanningReceipt} transparent animationType="fade">
+        <View style={styles.scanningModalBackdrop}>
+          <View style={styles.scanningModalBox}>
+            <View style={styles.scanningIconCircle}>
+              <ActivityIndicator size="large" color="#059669" />
+            </View>
+            <Text style={styles.scanningModalTitle}>AI Reading Receipt...</Text>
+            <Text style={styles.scanningModalSub}>
+              Detecting item names, quantities, and wholesale costs with Gemini. Please wait a moment.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* AI Receipt Review Modal */}
+      <ReceiptReviewModal
+        visible={showReceiptReview}
+        onClose={() => setShowReceiptReview(false)}
+        scanResult={receiptScanResult}
+        onApplySingleItem={handleApplySingleItem}
+        onBatchSaved={(count) => {
+          toast.success('Inventory Updated', `${count} items added to inventory.`);
+          setTimeout(() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace('/inventory');
+            }
+          }, 800);
+        }}
+      />
     </>
   );
 }
@@ -396,6 +591,77 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 50,
+  },
+  aiReceiptCard: {
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1.5,
+    borderColor: '#a7f3d0',
+    backgroundColor: '#f0fdf4',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  aiReceiptHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  aiIconBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#059669',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiReceiptTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#065f46',
+    letterSpacing: 0.2,
+  },
+  aiReceiptSub: {
+    fontSize: 12,
+    color: '#047857',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  aiReceiptButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  aiActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  cameraButton: {
+    backgroundColor: '#059669',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  uploadButton: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#059669',
+  },
+  aiActionButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   card: {
     backgroundColor: '#ffffff',
@@ -580,4 +846,41 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textDecorationLine: 'underline',
   },
+  scanningModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  scanningModalBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    maxWidth: 320,
+    width: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  scanningIconCircle: {
+    marginBottom: 16,
+  },
+  scanningModalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  scanningModalSub: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
 });
+

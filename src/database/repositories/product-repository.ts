@@ -1,4 +1,4 @@
-import { type SQLiteDatabase } from 'expo-sqlite';
+import { supabase } from '@/lib/supabase';
 import {
   type Product,
   type StockMovement,
@@ -47,348 +47,406 @@ export const ProductRepository = {
   /**
    * Retrieves a single product by its primary ID.
    */
-  async getById(db: SQLiteDatabase, id: number): Promise<Product | null> {
-    const row = await db.getFirstAsync<Product>(
-      `SELECT * FROM products WHERE id = ?;`,
-      [id]
-    );
-    return row ?? null;
+  async getById(arg1: any, arg2?: number): Promise<Product | null> {
+    const id = typeof arg1 === 'number' ? arg1 : arg2!;
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Supabase] Error in getById:', error);
+      throw error;
+    }
+    return data;
   },
 
   /**
    * Retrieves a single active product by its barcode.
    */
-  async getByBarcode(db: SQLiteDatabase, barcode: string): Promise<Product | null> {
-    const trimmed = barcode.trim();
-    if (!trimmed) return null;
-    const row = await db.getFirstAsync<Product>(
-      `SELECT * FROM products WHERE barcode = ? AND is_active = 1;`,
-      [trimmed]
-    );
-    return row ?? null;
+  async getByBarcode(arg1: any, arg2?: string): Promise<Product | null> {
+    const barcode = (typeof arg1 === 'string' ? arg1 : arg2 || '').trim();
+    if (!barcode) return null;
+
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('barcode', barcode)
+      .eq('is_active', 1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Supabase] Error in getByBarcode:', error);
+      throw error;
+    }
+    return data;
   },
 
   /**
    * Checks if a barcode is already used by another product.
    */
   async isBarcodeDuplicate(
-    db: SQLiteDatabase,
-    barcode: string,
-    excludeProductId?: number
+    arg1: any,
+    arg2?: string | number,
+    arg3?: number
   ): Promise<boolean> {
-    const trimmed = barcode.trim();
-    if (!trimmed) return false;
+    let barcode: string;
+    let excludeProductId: number | undefined;
+
+    if (typeof arg1 === 'string') {
+      barcode = arg1.trim();
+      excludeProductId = typeof arg2 === 'number' ? arg2 : undefined;
+    } else {
+      barcode = (typeof arg2 === 'string' ? arg2 : '').trim();
+      excludeProductId = typeof arg3 === 'number' ? arg3 : undefined;
+    }
+
+    if (!barcode) return false;
+
+    let query = supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('barcode', barcode)
+      .eq('is_active', 1);
 
     if (excludeProductId) {
-      const row = await db.getFirstAsync<{ count: number }>(
-        `SELECT COUNT(*) as count FROM products WHERE barcode = ? AND id != ? AND is_active = 1;`,
-        [trimmed, excludeProductId]
-      );
-      return (row?.count ?? 0) > 0;
-    } else {
-      const row = await db.getFirstAsync<{ count: number }>(
-        `SELECT COUNT(*) as count FROM products WHERE barcode = ? AND is_active = 1;`,
-        [trimmed]
-      );
-      return (row?.count ?? 0) > 0;
+      query = query.neq('id', excludeProductId);
     }
+
+    const { count, error } = await query;
+    if (error) {
+      console.error('[Supabase] Error in isBarcodeDuplicate:', error);
+      throw error;
+    }
+    return (count ?? 0) > 0;
   },
 
   /**
    * Creates a new product and logs an initial stock movement if initial stock > 0.
    */
-  async create(db: SQLiteDatabase, input: CreateProductInput): Promise<Product> {
-    const barcode = input.barcode?.trim() || null;
-    const name = input.name.trim();
-    const category = input.category?.trim() || 'General';
-    const cost_price = Math.max(0, Math.round(input.cost_price));
-    const selling_price = Math.max(0, Math.round(input.selling_price));
-    const stock_quantity = input.stock_quantity ?? 0;
-    const unit = input.unit?.trim() || 'piece';
-    const minimum_stock = Math.max(0, input.minimum_stock ?? 5);
-
-    if (!name) {
-      throw new Error('Product name is required.');
-    }
-
-    if (barcode) {
-      const duplicate = await this.isBarcodeDuplicate(db, barcode);
-      if (duplicate) {
-        throw new Error(`Barcode "${barcode}" is already registered to another active product.`);
-      }
-    }
-
+  async create(arg1: any, arg2?: CreateProductInput): Promise<Product> {
+    const input: CreateProductInput = arg2 ? arg2 : arg1;
     const now = new Date().toISOString();
 
-    let createdId = 0;
+    const insertData = {
+      barcode: input.barcode?.trim() || null,
+      name: input.name.trim(),
+      category: input.category?.trim() || 'General',
+      cost_price: Math.round(input.cost_price),
+      selling_price: Math.round(input.selling_price),
+      stock_quantity: input.stock_quantity ?? 0,
+      unit: input.unit || 'piece',
+      minimum_stock: input.minimum_stock ?? 5,
+      is_active: 1,
+      created_at: now,
+      updated_at: now,
+    };
 
-    await db.withTransactionAsync(async () => {
-      const result = await db.runAsync(
-        `INSERT INTO products (
-          barcode, name, category, cost_price, selling_price,
-          stock_quantity, unit, minimum_stock, is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?);`,
-        [
-          barcode,
-          name,
-          category,
-          cost_price,
-          selling_price,
-          stock_quantity,
-          unit,
-          minimum_stock,
-          now,
-          now,
-        ]
-      );
+    const { data, error } = await supabase
+      .from('products')
+      .insert(insertData)
+      .select()
+      .single();
 
-      createdId = result.lastInsertRowId;
-
-      // If initial stock is greater than 0, record initial stock movement
-      if (stock_quantity > 0) {
-        await db.runAsync(
-          `INSERT INTO stock_movements (
-            product_id, movement_type, quantity, previous_quantity,
-            new_quantity, reason, reference_type, reference_id, created_at
-          ) VALUES (?, 'initial', ?, 0, ?, 'Initial inventory stock', 'manual', NULL, ?);`,
-          [createdId, stock_quantity, stock_quantity, now]
-        );
-      }
-    });
-
-    const product = await this.getById(db, createdId);
-    if (!product) {
-      throw new Error('Failed to retrieve newly created product.');
+    if (error) {
+      console.error('[Supabase] Error in create product:', error);
+      throw error;
     }
 
-    return product;
+    if ((input.stock_quantity ?? 0) > 0) {
+      await supabase.from('stock_movements').insert({
+        product_id: data.id,
+        movement_type: 'initial',
+        quantity: input.stock_quantity,
+        previous_quantity: 0,
+        new_quantity: input.stock_quantity,
+        reason: 'Initial stock intake upon product creation',
+        reference_type: 'manual',
+        created_at: now,
+      });
+    }
+
+    return data;
   },
 
   /**
-   * Updates an existing product's details.
+   * Updates existing product metadata and pricing.
    */
-  async update(db: SQLiteDatabase, id: number, input: UpdateProductInput): Promise<Product> {
-    const existing = await this.getById(db, id);
-    if (!existing) {
+  async update(arg1: any, arg2?: any, arg3?: UpdateProductInput): Promise<Product> {
+    let id: number;
+    let input: UpdateProductInput;
+
+    if (typeof arg1 === 'number') {
+      id = arg1;
+      input = arg2;
+    } else {
+      id = arg2;
+      input = arg3!;
+    }
+
+    const updateFields: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (input.name !== undefined) updateFields.name = input.name.trim();
+    if (input.barcode !== undefined) updateFields.barcode = input.barcode ? input.barcode.trim() : null;
+    if (input.category !== undefined) updateFields.category = input.category.trim();
+    if (input.cost_price !== undefined) updateFields.cost_price = Math.round(input.cost_price);
+    if (input.selling_price !== undefined) updateFields.selling_price = Math.round(input.selling_price);
+    if (input.unit !== undefined) updateFields.unit = input.unit;
+    if (input.minimum_stock !== undefined) updateFields.minimum_stock = input.minimum_stock;
+    if (input.is_active !== undefined) updateFields.is_active = input.is_active;
+
+    const { data, error } = await supabase
+      .from('products')
+      .update(updateFields)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[Supabase] Error updating product:', error);
+      throw error;
+    }
+    return data;
+  },
+
+  /**
+   * Atomically adjusts stock quantity and creates an audit stock movement entry.
+   */
+  async adjustStock(arg1: any, arg2?: any, arg3?: AdjustStockInput): Promise<Product> {
+    let id: number;
+    let input: AdjustStockInput;
+
+    if (typeof arg1 === 'number') {
+      id = arg1;
+      input = arg2;
+    } else {
+      id = arg2;
+      input = arg3!;
+    }
+
+    // 1. Fetch current product
+    const { data: current, error: fetchErr } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !current) {
       throw new Error(`Product with ID ${id} not found.`);
     }
 
-    const barcode = input.barcode !== undefined ? (input.barcode?.trim() || null) : existing.barcode;
-    const name = input.name !== undefined ? input.name.trim() : existing.name;
-    const category = input.category !== undefined ? input.category.trim() : existing.category;
-    const cost_price = input.cost_price !== undefined ? Math.max(0, Math.round(input.cost_price)) : existing.cost_price;
-    const selling_price = input.selling_price !== undefined ? Math.max(0, Math.round(input.selling_price)) : existing.selling_price;
-    const unit = input.unit !== undefined ? input.unit.trim() : existing.unit;
-    const minimum_stock = input.minimum_stock !== undefined ? Math.max(0, input.minimum_stock) : existing.minimum_stock;
-    const is_active = input.is_active !== undefined ? input.is_active : existing.is_active;
-
-    if (!name) {
-      throw new Error('Product name cannot be empty.');
+    if (input.movementType === 'restock' && input.quantityDelta < 1) {
+      throw new Error('Restock quantity must be at least 1 (minimum of 1).');
     }
 
-    if (barcode && barcode !== existing.barcode) {
-      const duplicate = await this.isBarcodeDuplicate(db, barcode, id);
-      if (duplicate) {
-        throw new Error(`Barcode "${barcode}" is already registered to another product.`);
-      }
+    if (input.movementType === 'damage' && input.quantityDelta > -1) {
+      throw new Error('Damage quantity must be at most -1 (e.g. -1, -2 to deduct stock).');
+    }
+
+    const previousQty = current.stock_quantity;
+    const newQty = previousQty + input.quantityDelta;
+
+    if (newQty < 0) {
+      throw new Error(
+        `Cannot reduce stock by ${Math.abs(input.quantityDelta)}. Current stock is only ${previousQty}.`
+      );
     }
 
     const now = new Date().toISOString();
 
-    await db.runAsync(
-      `UPDATE products SET
-        barcode = ?,
-        name = ?,
-        category = ?,
-        cost_price = ?,
-        selling_price = ?,
-        unit = ?,
-        minimum_stock = ?,
-        is_active = ?,
-        updated_at = ?
-      WHERE id = ?;`,
-      [
-        barcode,
-        name,
-        category,
-        cost_price,
-        selling_price,
-        unit,
-        minimum_stock,
-        is_active,
-        now,
-        id,
-      ]
-    );
+    // 2. Update product stock
+    const { data: updated, error: updateErr } = await supabase
+      .from('products')
+      .update({
+        stock_quantity: newQty,
+        updated_at: now,
+      })
+      .eq('id', id)
+      .select()
+      .single();
 
-    const updated = await this.getById(db, id);
-    if (!updated) {
-      throw new Error(`Failed to retrieve updated product ${id}.`);
+    if (updateErr) {
+      throw updateErr;
     }
+
+    // 3. Log stock movement
+    await supabase.from('stock_movements').insert({
+      product_id: id,
+      movement_type: input.movementType,
+      quantity: input.quantityDelta,
+      previous_quantity: previousQty,
+      new_quantity: newQty,
+      reason: input.reason,
+      reference_type: input.referenceType ?? null,
+      reference_id: input.referenceId ? String(input.referenceId) : null,
+      created_at: now,
+    });
 
     return updated;
   },
 
   /**
-   * Adjusts the stock quantity of a product with a required reason.
-   * Atomically updates products.stock_quantity and records an entry in stock_movements.
+   * Retrieves products filtered and sorted for the inventory/POS list.
    */
-  async adjustStock(
-    db: SQLiteDatabase,
-    productId: number,
-    adjustment: AdjustStockInput
-  ): Promise<Product> {
-    const reason = adjustment.reason.trim();
-    if (!reason) {
-      throw new Error('A reason is required when adjusting stock.');
-    }
+  async getAll(arg1?: any, arg2?: ProductFilter): Promise<Product[]> {
+    const filter: ProductFilter = (arg2 || (arg1 && typeof arg1 === 'object' && !arg1.getAllAsync ? arg1 : {})) || {};
 
-    let updatedProduct: Product | null = null;
-
-    await db.withTransactionAsync(async () => {
-      const existing = await this.getById(db, productId);
-      if (!existing) {
-        throw new Error(`Product with ID ${productId} not found.`);
-      }
-
-      const prevStock = existing.stock_quantity;
-      const newStock = Math.max(0, prevStock + adjustment.quantityDelta);
-      const now = new Date().toISOString();
-
-      // Update product stock
-      await db.runAsync(
-        `UPDATE products SET stock_quantity = ?, updated_at = ? WHERE id = ?;`,
-        [newStock, now, productId]
-      );
-
-      // Record stock movement audit entry
-      await db.runAsync(
-        `INSERT INTO stock_movements (
-          product_id, movement_type, quantity, previous_quantity,
-          new_quantity, reason, reference_type, reference_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        [
-          productId,
-          adjustment.movementType,
-          adjustment.quantityDelta,
-          prevStock,
-          newStock,
-          reason,
-          adjustment.referenceType ?? 'manual',
-          adjustment.referenceId?.toString() ?? null,
-          now,
-        ]
-      );
-    });
-
-    updatedProduct = await this.getById(db, productId);
-    if (!updatedProduct) {
-      throw new Error(`Failed to load product after stock adjustment.`);
-    }
-
-    return updatedProduct;
-  },
-
-  /**
-   * Archives a product (soft delete) to preserve historical sales records.
-   */
-  async archive(db: SQLiteDatabase, id: number): Promise<void> {
-    const now = new Date().toISOString();
-    await db.runAsync(
-      `UPDATE products SET is_active = 0, updated_at = ? WHERE id = ?;`,
-      [now, id]
-    );
-  },
-
-  /**
-   * Restores an archived product.
-   */
-  async unarchive(db: SQLiteDatabase, id: number): Promise<void> {
-    const now = new Date().toISOString();
-    await db.runAsync(
-      `UPDATE products SET is_active = 1, updated_at = ? WHERE id = ?;`,
-      [now, id]
-    );
-  },
-
-  /**
-   * Queries products with optional search, filtering, and sorting.
-   */
-  async getAll(db: SQLiteDatabase, filter: ProductFilter = {}): Promise<Product[]> {
-    let sql = `SELECT * FROM products WHERE 1=1`;
-    const params: (string | number)[] = [];
-
-    // Active / archived filter
-    if (filter.status === 'archived') {
-      sql += ` AND is_active = 0`;
-    } else if (filter.status === 'all') {
-      // Show all
-    } else {
-      sql += ` AND is_active = 1`;
-    }
+    let query = supabase.from('products').select('*');
 
     // Status filter
-    if (filter.status === 'low_stock') {
-      sql += ` AND stock_quantity <= minimum_stock AND stock_quantity > 0`;
-    } else if (filter.status === 'out_of_stock') {
-      sql += ` AND stock_quantity <= 0`;
+    if (filter.status === 'archived') {
+      query = query.eq('is_active', 0);
+    } else if (filter.status === 'all') {
+      // no filter
+    } else {
+      query = query.eq('is_active', 1);
+      if (filter.status === 'low_stock') {
+        // filter client-side or condition
+      } else if (filter.status === 'out_of_stock') {
+        query = query.lte('stock_quantity', 0);
+      }
     }
 
     // Category filter
     if (filter.category && filter.category !== 'All') {
-      sql += ` AND category = ?`;
-      params.push(filter.category);
+      query = query.eq('category', filter.category);
     }
 
-    // Search query (matches name or barcode)
+    // Search filter
     if (filter.search && filter.search.trim()) {
-      const term = `%${filter.search.trim()}%`;
-      sql += ` AND (name LIKE ? OR barcode LIKE ?)`;
-      params.push(term, term);
+      const term = filter.search.trim();
+      query = query.or(`name.ilike.%${term}%,barcode.ilike.%${term}%`);
     }
 
     // Sorting
-    const sortOrder = filter.sortOrder?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
-    switch (filter.sortBy) {
-      case 'stock':
-        sql += ` ORDER BY stock_quantity ${sortOrder}, name ASC`;
-        break;
-      case 'price':
-        sql += ` ORDER BY selling_price ${sortOrder}, name ASC`;
-        break;
-      case 'updated_at':
-        sql += ` ORDER BY updated_at ${sortOrder}`;
-        break;
-      case 'name':
-      default:
-        sql += ` ORDER BY name ${sortOrder}`;
-        break;
+    const isAsc = filter.sortOrder === 'asc';
+    if (filter.sortBy === 'name') {
+      query = query.order('name', { ascending: isAsc });
+    } else if (filter.sortBy === 'stock') {
+      query = query.order('stock_quantity', { ascending: isAsc });
+    } else if (filter.sortBy === 'price') {
+      query = query.order('selling_price', { ascending: isAsc });
+    } else {
+      query = query.order('updated_at', { ascending: isAsc });
     }
 
-    return await db.getAllAsync<Product>(sql, params);
+    const { data, error } = await query;
+    if (error) {
+      console.error('[Supabase] Error in getAll products:', error);
+      throw error;
+    }
+
+    let results = (data as Product[]) || [];
+    if (filter.status === 'low_stock') {
+      results = results.filter((p) => p.stock_quantity > 0 && p.stock_quantity <= p.minimum_stock);
+    }
+
+    return results;
   },
 
   /**
-   * Retrieves all unique categories from products.
+   * Retrieves unique categories from active products.
    */
-  async getCategories(db: SQLiteDatabase): Promise<string[]> {
-    const rows = await db.getAllAsync<{ category: string }>(
-      `SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != '' ORDER BY category ASC;`
-    );
-    return rows.map((r) => r.category);
+  async getCategories(_arg1?: any): Promise<string[]> {
+    const { data, error } = await supabase
+      .from('products')
+      .select('category')
+      .eq('is_active', 1);
+
+    if (error) {
+      console.error('[Supabase] Error getting categories:', error);
+      return ['General'];
+    }
+
+    const set = new Set<string>();
+    for (const item of data || []) {
+      if (item.category) set.add(item.category);
+    }
+    const list = Array.from(set).sort();
+    return list.length > 0 ? list : ['General'];
   },
 
   /**
-   * Retrieves stock movement history for a specific product.
+   * Retrieves count of products currently at or below their minimum stock threshold.
    */
-  async getStockMovements(
-    db: SQLiteDatabase,
-    productId: number,
-    limit = 50
-  ): Promise<StockMovement[]> {
-    return await db.getAllAsync<StockMovement>(
-      `SELECT * FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC LIMIT ?;`,
-      [productId, limit]
-    );
+  async getLowStockCount(_arg1?: any): Promise<number> {
+    const { data, error } = await supabase
+      .from('products')
+      .select('stock_quantity, minimum_stock')
+      .eq('is_active', 1);
+
+    if (error) {
+      console.error('[Supabase] Error in getLowStockCount:', error);
+      return 0;
+    }
+
+    return (data || []).filter((p) => p.stock_quantity > 0 && p.stock_quantity <= p.minimum_stock).length;
+  },
+
+  /**
+   * Soft-deletes (archives) or hard-deletes a product.
+   */
+  async delete(arg1: any, arg2?: any, arg3?: boolean): Promise<void> {
+    let id: number;
+    let hardDelete: boolean;
+
+    if (typeof arg1 === 'number') {
+      id = arg1;
+      hardDelete = !!arg2;
+    } else {
+      id = arg2;
+      hardDelete = !!arg3;
+    }
+
+    if (hardDelete) {
+      const { error } = await supabase.from('products').delete().eq('id', id);
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from('products')
+        .update({ is_active: 0, updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw error;
+    }
+  },
+
+  /**
+   * Archives a product (soft-delete).
+   */
+  async archive(arg1: any, arg2?: number): Promise<void> {
+    const id = typeof arg1 === 'number' ? arg1 : arg2!;
+    return this.delete(id, false);
+  },
+
+  /**
+   * Retrieves stock history / audit trail for a specific product.
+   */
+  async getStockMovements(arg1: any, arg2?: any, arg3?: number): Promise<StockMovement[]> {
+    let productId: number;
+    let limit: number;
+
+    if (typeof arg1 === 'number') {
+      productId = arg1;
+      limit = typeof arg2 === 'number' ? arg2 : 50;
+    } else {
+      productId = arg2;
+      limit = typeof arg3 === 'number' ? arg3 : 50;
+    }
+
+    const { data, error } = await supabase
+      .from('stock_movements')
+      .select('*')
+      .eq('product_id', productId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('[Supabase] Error getting stock movements:', error);
+      throw error;
+    }
+    return (data as StockMovement[]) || [];
   },
 };

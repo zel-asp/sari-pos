@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,58 +9,107 @@ import {
   StyleSheet,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
 import { CustomerRepository } from '@/database/repositories/customer-repository';
-import { seedDemoUtangIfEmpty } from '@/database';
+import { supabase } from '@/lib/supabase';
 import { AppButton } from '@/components/ui/app-button';
-import { BottomNavBar } from '@/components/navigation/bottom-nav-bar';
+import { AppLayout } from '@/components/navigation/app-layout';
+import { Pagination } from '@/components/ui/pagination';
 import { formatPHP } from '@/utils/currency';
 import { type Customer } from '@/types/database';
 
+const PAGE_SIZE = 15;
+
 export default function UtangListScreen() {
-  const db = useSQLiteContext();
   const [loading, setLoading] = useState(true);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'balance' | 'paid'>('all');
+  const [page, setPage] = useState(1);
   const [reloadKey, setReloadKey] = useState(0);
+  const [realtimePulse, setRealtimePulse] = useState(false);
 
-  const [seeding, setSeeding] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    seedDemoUtangIfEmpty(db)
-      .then(() =>
-        CustomerRepository.getAll(db, {
+  const loadCustomers = useCallback(
+    async (showLoading = true) => {
+      if (showLoading) setLoading(true);
+      try {
+        const data = await CustomerRepository.getAll({
           search: searchQuery,
           hasBalanceOnly: filterTab === 'balance',
           sortBy: 'balance',
-        })
+        });
+        if (filterTab === 'paid') {
+          setCustomers(data.filter((c) => c.outstanding_balance === 0));
+        } else {
+          setCustomers(data);
+        }
+      } catch (err) {
+        console.error('[UtangList] Failed to load customers:', err);
+      } finally {
+        if (showLoading) setLoading(false);
+      }
+    },
+    [searchQuery, filterTab]
+  );
+
+  useEffect(() => {
+    loadCustomers(true);
+  }, [loadCustomers, reloadKey]);
+
+  const loadCustomersRef = useRef(loadCustomers);
+  useEffect(() => {
+    loadCustomersRef.current = loadCustomers;
+  }, [loadCustomers]);
+
+  // Supabase Real-time Listener for Customers, Credit Transactions & Payments
+  useEffect(() => {
+    const channelId = `utang-realtime-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customers' },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          loadCustomersRef.current(false);
+        }
       )
-      .then((data) => {
-        if (isMounted) {
-          if (filterTab === 'paid') {
-            setCustomers(data.filter((c) => c.outstanding_balance === 0));
-          } else {
-            setCustomers(data);
-          }
-          setLoading(false);
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'credit_transactions' },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          loadCustomersRef.current(false);
         }
-      })
-      .catch((err) => {
-        if (isMounted) {
-          console.error('[UtangList] Failed to load customers:', err);
-          setLoading(false);
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customer_payments' },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          loadCustomersRef.current(false);
         }
-      });
+      )
+      .subscribe();
 
     return () => {
-      isMounted = false;
+      supabase.removeChannel(channel);
     };
-  }, [db, searchQuery, filterTab, reloadKey]);
+  }, []);
+
+  // Reset page when search or tab filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, filterTab]);
+
+  const paginatedCustomers = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return customers.slice(start, start + PAGE_SIZE);
+  }, [customers, page]);
 
   // Totals across all customers
   const totalOutstanding = customers.reduce((sum, c) => sum + c.outstanding_balance, 0);
@@ -68,38 +117,24 @@ export default function UtangListScreen() {
   const totalPaid = customers.reduce((sum, c) => sum + c.total_paid_amount, 0);
   const unpaidCount = customers.filter((c) => c.outstanding_balance > 0).length;
 
-  const handleSeedSampleUtang = async () => {
-    try {
-      setSeeding(true);
-      await seedDemoUtangIfEmpty(db);
-      setReloadKey((k) => k + 1);
-    } catch (err) {
-      console.error('[UtangList] Failed to seed sample utang:', err);
-    } finally {
-      setSeeding(false);
-    }
-  };
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: 'Customer Utang',
-          headerStyle: { backgroundColor: '#ffffff' },
-          headerTintColor: '#059669',
-          headerTitleStyle: { fontWeight: '900' },
-          headerRight: () => (
-            <Pressable
-              onPress={() => router.push('/utang/new')}
-              style={({ pressed }) => [styles.headerAddBtn, pressed && { opacity: 0.7 }]}
-            >
-              <FontAwesome5 name="plus" size={13} color="#ffffff" style={{ marginRight: 6 }} />
-              <Text style={styles.headerAddText}>New Utang</Text>
-            </Pressable>
-          ),
-        }}
-      />
-      <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AppLayout
+        activeTab="utang"
+        title="Customer Utang"
+        headerRight={
+          <Pressable
+            onPress={() => router.push('/utang/new')}
+            style={({ pressed }) => [styles.headerAddBtn, pressed && { opacity: 0.7 }]}
+          >
+            <FontAwesome5 name="plus" size={13} color="#ffffff" style={{ marginRight: 6 }} />
+            <Text style={styles.headerAddText}>New Utang</Text>
+          </Pressable>
+        }
+      >
+        <View style={styles.safeArea}>
         {/* Search Bar */}
         <View style={styles.searchSection}>
           <View style={styles.searchBar}>
@@ -166,7 +201,15 @@ export default function UtangListScreen() {
           <View style={styles.summaryCard}>
             <View style={styles.summaryTopRow}>
               <View>
-                <Text style={styles.summarySubtitle}>Total Outstanding Utang</Text>
+                <View style={styles.liveBadgeRow}>
+                  <Text style={styles.summarySubtitle}>Total Outstanding Utang</Text>
+                  <View style={[styles.realtimePill, realtimePulse && styles.realtimePillPulsing]}>
+                    <View style={[styles.realtimeDot, realtimePulse && styles.realtimeDotPulsing]} />
+                    <Text style={[styles.realtimeText, realtimePulse && styles.realtimeTextPulsing]}>
+                      {realtimePulse ? 'Updated live' : 'Realtime'}
+                    </Text>
+                  </View>
+                </View>
                 <Text style={styles.summaryBigAmount}>{formatPHP(totalOutstanding)}</Text>
               </View>
               <View style={styles.summaryPill}>
@@ -205,7 +248,7 @@ export default function UtangListScreen() {
           </View>
 
           {/* Customer Cards */}
-          {customers.map((customer) => {
+          {paginatedCustomers.map((customer) => {
             const hasBalance = customer.outstanding_balance > 0;
             return (
               <Pressable
@@ -289,6 +332,16 @@ export default function UtangListScreen() {
             );
           })}
 
+          {customers.length > 0 && (
+            <Pagination
+              currentPage={page}
+              totalItems={customers.length}
+              pageSize={PAGE_SIZE}
+              onPageChange={(p) => setPage(p)}
+              itemName="customers"
+            />
+          )}
+
           {/* Empty State */}
           {customers.length === 0 && !loading && (
             <View style={styles.emptyState}>
@@ -306,24 +359,13 @@ export default function UtangListScreen() {
                 title="Record New Utang"
                 icon={<FontAwesome5 name="plus" size={14} color="#ffffff" />}
                 size="md"
-                style={{ minWidth: 200, marginBottom: 10 }}
-              />
-              <AppButton
-                onPress={handleSeedSampleUtang}
-                title="Load Sample Customers & Utang"
-                variant="secondary"
-                loading={seeding}
-                icon={<FontAwesome5 name="bolt" size={13} color="#059669" />}
-                size="md"
                 style={{ minWidth: 200 }}
               />
             </View>
           )}
         </ScrollView>
-
-        {/* Bottom Navigation Bar */}
-        <BottomNavBar activeTab="utang" />
-      </SafeAreaView>
+        </View>
+      </AppLayout>
     </>
   );
 }
@@ -420,13 +462,52 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
+  liveBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  realtimePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  realtimePillPulsing: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#4ade80',
+  },
+  realtimeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+    marginRight: 4,
+  },
+  realtimeDotPulsing: {
+    backgroundColor: '#059669',
+  },
+  realtimeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#059669',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  realtimeTextPulsing: {
+    color: '#047857',
+  },
   summarySubtitle: {
     fontSize: 12,
     fontWeight: '700',
     color: '#64748b',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 4,
   },
   summaryBigAmount: {
     fontSize: 26,

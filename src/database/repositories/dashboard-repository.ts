@@ -1,168 +1,183 @@
-import { type SQLiteDatabase } from 'expo-sqlite';
+import { supabase } from '@/lib/supabase';
 import { type DashboardPeriod, type DashboardSummary } from '@/types/database';
 
 export const DashboardRepository = {
   /**
    * Computes comprehensive dashboard financial and inventory metrics
-   * based on actual SQLite database records.
+   * based on Supabase database records.
    */
-  async getSummary(db: SQLiteDatabase, period: DashboardPeriod = 'today'): Promise<DashboardSummary> {
-    const now = new Date();
-    let startDateStr = '';
-    let endDateStr = '';
+  async getSummary(arg1?: any, arg2?: DashboardPeriod): Promise<DashboardSummary> {
+    const period: DashboardPeriod =
+      typeof arg1 === 'string'
+        ? (arg1 as DashboardPeriod)
+        : arg2
+        ? arg2
+        : 'today';
 
-    const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
-    const formatDate = (d: Date) =>
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const now = new Date();
+    let start: Date;
+    let end: Date;
 
     if (period === 'today') {
-      const todayStr = formatDate(now);
-      startDateStr = `${todayStr}T00:00:00.000Z`;
-      endDateStr = `${todayStr}T23:59:59.999Z`;
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     } else if (period === 'week') {
-      // 7 days ago
-      const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      startDateStr = `${formatDate(startOfWeek)}T00:00:00.000Z`;
-      endDateStr = `${formatDate(now)}T23:59:59.999Z`;
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      start = new Date(end.getTime() - 6 * 24 * 3600000);
+      start.setHours(0, 0, 0, 0);
     } else {
-      // Current month: 1st day of month
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      startDateStr = `${formatDate(startOfMonth)}T00:00:00.000Z`;
-      endDateStr = `${formatDate(now)}T23:59:59.999Z`;
+      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      end = new Date(now.getFullYear(), now.getMonth(), lastDayOfMonth, 23, 59, 59, 999);
     }
 
-    // 1. Inventory Metrics
-    const productStats = await db.getFirstAsync<{
-      total_count: number;
-      in_stock: number;
-      low_stock: number;
-      out_of_stock: number;
-      total_cost_value: number;
-    }>(`
-      SELECT
-        COUNT(*) as total_count,
-        COALESCE(SUM(CASE WHEN stock_quantity > 0 THEN 1 ELSE 0 END), 0) as in_stock,
-        COALESCE(SUM(CASE WHEN stock_quantity > 0 AND stock_quantity <= minimum_stock THEN 1 ELSE 0 END), 0) as low_stock,
-        COALESCE(SUM(CASE WHEN stock_quantity <= 0 THEN 1 ELSE 0 END), 0) as out_of_stock,
-        COALESCE(SUM(ROUND(stock_quantity * cost_price)), 0) as total_cost_value
-      FROM products
-      WHERE is_active = 1;
-    `);
+    const startDateStr = start.toISOString();
+    const endDateStr = end.toISOString();
 
-    // 2. Sales in Period (Cash / Normal POS sales)
-    const cashSales = await db.getFirstAsync<{ total: number }>(
-      `SELECT COALESCE(SUM(total_amount), 0) as total
-       FROM sales
-       WHERE status = 'completed' AND transaction_date >= ? AND transaction_date <= ?;`,
-      [startDateStr, endDateStr]
-    );
+    // 1. Inventory Metrics from Products
+    const { data: products } = await supabase
+      .from('products')
+      .select('stock_quantity, minimum_stock, cost_price')
+      .eq('is_active', 1);
+
+    const prods = products || [];
+    let inStockCount = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    let totalInventoryCostValue = 0;
+
+    for (const p of prods) {
+      if (p.stock_quantity > 0) {
+        inStockCount++;
+        if (p.stock_quantity <= p.minimum_stock) {
+          lowStockCount++;
+        }
+      } else {
+        outOfStockCount++;
+      }
+      totalInventoryCostValue += Math.round((p.stock_quantity || 0) * (p.cost_price || 0));
+    }
+
+    // 2. Sales in Period (Cash)
+    const { data: sales } = await supabase
+      .from('sales')
+      .select('total_amount')
+      .eq('status', 'completed')
+      .gte('transaction_date', startDateStr)
+      .lte('transaction_date', endDateStr);
+
+    const cashSalesAmount = (sales || []).reduce((acc, s) => acc + (s.total_amount || 0), 0);
 
     // 3. Credit / Utang Sales in Period
-    const creditSales = await db.getFirstAsync<{ total: number }>(
-      `SELECT COALESCE(SUM(total_amount), 0) as total
-       FROM credit_transactions
-       WHERE status = 'active' AND transaction_date >= ? AND transaction_date <= ?;`,
-      [startDateStr, endDateStr]
-    );
+    const { data: creditTxs } = await supabase
+      .from('credit_transactions')
+      .select('total_amount')
+      .neq('status', 'cancelled')
+      .gte('transaction_date', startDateStr)
+      .lte('transaction_date', endDateStr);
+
+    const creditSalesAmount = (creditTxs || []).reduce((acc, c) => acc + (c.total_amount || 0), 0);
 
     // 4. Utang Repayments in Period
-    const repayments = await db.getFirstAsync<{ total: number }>(
-      `SELECT COALESCE(SUM(amount), 0) as total
-       FROM customer_payments
-       WHERE payment_date >= ? AND payment_date <= ?;`,
-      [startDateStr, endDateStr]
+    const { data: payments } = await supabase
+      .from('customer_payments')
+      .select('amount')
+      .gte('payment_date', startDateStr)
+      .lte('payment_date', endDateStr);
+
+    const repaymentsAmount = (payments || []).reduce((acc, p) => acc + (p.amount || 0), 0);
+
+    // 5. Total Outstanding Utang & Unpaid Customers
+    const { data: customers } = await supabase
+      .from('customers')
+      .select('outstanding_balance')
+      .eq('is_active', 1);
+
+    let totalOutstandingUtang = 0;
+    let unpaidCustomersCount = 0;
+    for (const c of customers || []) {
+      const bal = c.outstanding_balance || 0;
+      totalOutstandingUtang += bal;
+      if (bal > 0) unpaidCustomersCount++;
+    }
+
+    // 6. Cost of Goods Sold (COGS)
+    // Fetch sale items in period
+    const { data: saleItems } = await supabase
+      .from('sale_items')
+      .select('quantity, unit_cost_snapshot, sales!inner(status, transaction_date)')
+      .eq('sales.status', 'completed')
+      .gte('sales.transaction_date', startDateStr)
+      .lte('sales.transaction_date', endDateStr);
+
+    const cashCogs = (saleItems || []).reduce(
+      (acc, si) => acc + Math.round((si.quantity || 0) * (si.unit_cost_snapshot || 0)),
+      0
     );
 
-    // 5. Total Outstanding Utang & Unpaid Customers (Current overall balance)
-    const utangStats = await db.getFirstAsync<{
-      total_balance: number;
-      unpaid_count: number;
-    }>(`
-      SELECT
-        COALESCE(SUM(outstanding_balance), 0) as total_balance,
-        COALESCE(SUM(CASE WHEN outstanding_balance > 0 THEN 1 ELSE 0 END), 0) as unpaid_count
-      FROM customers
-      WHERE is_active = 1;
-    `);
+    // Fetch credit items in period
+    const { data: creditItems } = await supabase
+      .from('credit_transaction_items')
+      .select('quantity, unit_cost_snapshot, credit_transactions!inner(status, transaction_date)')
+      .neq('credit_transactions.status', 'cancelled')
+      .gte('credit_transactions.transaction_date', startDateStr)
+      .lte('credit_transactions.transaction_date', endDateStr);
 
-    // 6. Cost of Goods Sold (COGS) in Period
-    // COGS from cash sales
-    const cashCogs = await db.getFirstAsync<{ total_cogs: number }>(
-      `SELECT COALESCE(SUM(ROUND(si.quantity * si.unit_cost_snapshot)), 0) as total_cogs
-       FROM sale_items si
-       JOIN sales s ON si.sale_id = s.id
-       WHERE s.status = 'completed' AND s.transaction_date >= ? AND s.transaction_date <= ?;`,
-      [startDateStr, endDateStr]
+    const creditCogs = (creditItems || []).reduce(
+      (acc, ci) => acc + Math.round((ci.quantity || 0) * (ci.unit_cost_snapshot || 0)),
+      0
     );
 
-    // COGS from credit sales
-    const creditCogs = await db.getFirstAsync<{ total_cogs: number }>(
-      `SELECT COALESCE(SUM(ROUND(ci.quantity * ci.unit_cost_snapshot)), 0) as total_cogs
-       FROM credit_transaction_items ci
-       JOIN credit_transactions ct ON ci.credit_transaction_id = ct.id
-       WHERE ct.status = 'active' AND ct.transaction_date >= ? AND ct.transaction_date <= ?;`,
-      [startDateStr, endDateStr]
-    );
+    const totalCogs = cashCogs + creditCogs;
 
-    const totalCogs = (cashCogs?.total_cogs ?? 0) + (creditCogs?.total_cogs ?? 0);
+    // 7. Operating Expenses
+    const { data: expenses } = await supabase
+      .from('expenses')
+      .select('amount')
+      .eq('status', 'active')
+      .gte('expense_date', startDateStr)
+      .lte('expense_date', endDateStr);
 
-    // 7. Operating Expenses in Period
-    const expenses = await db.getFirstAsync<{ total: number }>(
-      `SELECT COALESCE(SUM(amount), 0) as total
-       FROM expenses
-       WHERE status = 'active' AND expense_date >= ? AND expense_date <= ?;`,
-      [startDateStr, endDateStr]
-    );
+    const operatingExpenses = (expenses || []).reduce((acc, e) => acc + (e.amount || 0), 0);
 
-    // 8. Inventory Losses in Period (Damaged/Spoiled stock)
-    const inventoryLosses = await db.getFirstAsync<{ total_loss: number }>(
-      `SELECT COALESCE(SUM(ROUND(ABS(sm.quantity) * p.cost_price)), 0) as total_loss
-       FROM stock_movements sm
-       JOIN products p ON sm.product_id = p.id
-       WHERE sm.movement_type IN ('damage', 'loss')
-         AND sm.created_at >= ? AND sm.created_at <= ?;`,
-      [startDateStr, endDateStr]
-    );
+    // 8. Inventory Losses
+    const { data: damagedMovements } = await supabase
+      .from('stock_movements')
+      .select('quantity, products!inner(cost_price)')
+      .in('movement_type', ['damage', 'loss', 'expired', 'spoilage', 'theft'])
+      .gte('created_at', startDateStr)
+      .lte('created_at', endDateStr);
 
-    const cashSalesAmount = cashSales?.total ?? 0;
-    const creditSalesAmount = creditSales?.total ?? 0;
-    const repaymentsAmount = repayments?.total ?? 0;
+    const inventoryLosses = (damagedMovements || []).reduce((acc: number, sm: any) => {
+      const cost = sm.products?.cost_price || 0;
+      return acc + Math.round(Math.abs(sm.quantity || 0) * cost);
+    }, 0);
 
-    // Actual cash collected = Cash sales + customer repayments
     const totalCashReceived = cashSalesAmount + repaymentsAmount;
-
-    // Total sales revenue = Cash sales + Credit sales (borrowing is a sale on credit)
     const salesRevenue = cashSalesAmount + creditSalesAmount;
-
-    // Gross profit = Sales revenue - COGS
     const estimatedGrossProfit = salesRevenue - totalCogs;
-
-    const operatingExpenses = expenses?.total ?? 0;
-    const losses = inventoryLosses?.total_loss ?? 0;
-
-    // Net profit = Gross profit - Expenses - Inventory Losses
-    const estimatedNetProfit = estimatedGrossProfit - operatingExpenses - losses;
+    const estimatedNetProfit = estimatedGrossProfit - operatingExpenses - inventoryLosses;
 
     return {
       period,
-      totalProducts: productStats?.total_count ?? 0,
-      inStockCount: productStats?.in_stock ?? 0,
-      lowStockCount: productStats?.low_stock ?? 0,
-      outOfStockCount: productStats?.out_of_stock ?? 0,
-      totalInventoryCostValue: productStats?.total_cost_value ?? 0,
+      totalProducts: prods.length,
+      inStockCount,
+      lowStockCount,
+      outOfStockCount,
+      totalInventoryCostValue,
 
       cashSalesAmount,
       creditSalesAmount,
       repaymentsAmount,
       totalCashReceived,
-      totalOutstandingUtang: utangStats?.total_balance ?? 0,
-      unpaidCustomersCount: utangStats?.unpaid_count ?? 0,
+      totalOutstandingUtang,
+      unpaidCustomersCount,
 
       salesRevenue,
       costOfGoodsSold: totalCogs,
       estimatedGrossProfit,
       operatingExpenses,
-      inventoryLosses: losses,
+      inventoryLosses,
       estimatedNetProfit,
     };
   },

@@ -10,12 +10,12 @@ import {
   RefreshControl,
 } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
 import { useToast } from '@/components/ui/toast';
 import { AppButton } from '@/components/ui/app-button';
 import { CustomerRepository } from '@/database/repositories/customer-repository';
+import { supabase } from '@/lib/supabase';
 import { formatPHP } from '@/utils/currency';
 import {
   type Customer,
@@ -36,7 +36,6 @@ export default function CustomerProfileRoute() {
 }
 
 function CustomerProfileScreen({ customerId }: { customerId: number }) {
-  const db = useSQLiteContext();
   const toast = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -59,9 +58,9 @@ function CustomerProfileScreen({ customerId }: { customerId: number }) {
     let isMounted = true;
 
     Promise.all([
-      CustomerRepository.getById(db, customerId),
-      CustomerRepository.getCustomerTransactions(db, customerId),
-      CustomerRepository.getCustomerPayments(db, customerId),
+      CustomerRepository.getById(customerId),
+      CustomerRepository.getCustomerTransactions(customerId),
+      CustomerRepository.getCustomerPayments(customerId),
     ])
       .then(([cust, txs, pays]) => {
         if (isMounted) {
@@ -81,7 +80,41 @@ function CustomerProfileScreen({ customerId }: { customerId: number }) {
     return () => {
       isMounted = false;
     };
-  }, [db, customerId, reloadKey]);
+  }, [customerId, reloadKey]);
+
+  // Real-time synchronization for customer utang profile, transactions & payments
+  useEffect(() => {
+    if (!customerId) return;
+    const channelId = `customer-profile-live-${customerId}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customers', filter: `id=eq.${customerId}` },
+        () => {
+          setReloadKey((k) => k + 1);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'credit_transactions', filter: `customer_id=eq.${customerId}` },
+        () => {
+          setReloadKey((k) => k + 1);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customer_payments', filter: `customer_id=eq.${customerId}` },
+        () => {
+          setReloadKey((k) => k + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [customerId]);
 
   const loadCustomerData = useCallback(() => {
     setLoading(true);
@@ -124,7 +157,7 @@ function CustomerProfileScreen({ customerId }: { customerId: number }) {
 
     try {
       setSubmittingPayment(true);
-      const result = await CustomerRepository.recordPayment(db, {
+      const result = await CustomerRepository.recordPayment({
         customerId: customer.id,
         amount: centavos,
         paymentMethod,

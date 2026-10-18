@@ -77,6 +77,18 @@ export interface StockMovement {
   created_at: string;
 }
 
+export interface StockMovementWithProduct extends StockMovement {
+  product?: {
+    id: number;
+    name: string;
+    barcode?: string | null;
+    unit?: string;
+    category?: string | null;
+    selling_price?: number;
+    cost_price?: number;
+  } | null;
+}
+
 export type ExpenseCategory =
   | 'utilities'
   | 'rent'

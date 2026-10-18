@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,11 +16,14 @@ import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
 import { useToast } from '@/components/ui/toast';
 import { AppButton } from '@/components/ui/app-button';
 import { BarcodeScannerModal } from '@/components/camera/barcode-scanner-modal';
+import { Pagination } from '@/components/ui/pagination';
 import { useProduct } from '@/hooks/use-products';
 import { formatPHP, centavosToPesos, pesosToCentavos } from '@/utils/currency';
 import { StockStatusBadge } from '@/components/ui/badge';
 import { type MovementType, type Product } from '@/types/database';
 import { type UpdateProductInput } from '@/database/repositories/product-repository';
+
+const PAGE_SIZE = 15;
 
 interface EditFormProps {
   product: Product;
@@ -205,6 +208,12 @@ export default function ProductDetailScreen() {
 
   const toast = useToast();
   const [isEditing, setIsEditing] = useState(false);
+  const [movementsPage, setMovementsPage] = useState(1);
+
+  const paginatedMovements = useMemo(() => {
+    const start = (movementsPage - 1) * PAGE_SIZE;
+    return stockMovements.slice(start, start + PAGE_SIZE);
+  }, [stockMovements, movementsPage]);
 
   // Restock / Adjustment Modal
   const [showAdjustModal, setShowAdjustModal] = useState(false);
@@ -246,6 +255,16 @@ export default function ProductDetailScreen() {
       toast.warning('Invalid Quantity', 'Please enter a non-zero quantity to adjust.');
       return;
     }
+    if (adjustType === 'restock' && delta < 1) {
+      toast.warning('Minimum of 1 Required', 'Restock quantity must be at least 1 (positive number).');
+      return;
+    }
+
+    if (adjustType === 'damage' && delta > -1) {
+      toast.warning('Maximum of -1 Required', 'Damage quantity must be at most -1 (e.g. -1, -2 to deduct damaged stock).');
+      return;
+    }
+
     if (!adjustReason.trim()) {
       toast.warning('Reason Required', 'Please provide a reason for adjusting the stock quantity.');
       return;
@@ -448,54 +467,63 @@ export default function ProductDetailScreen() {
           {stockMovements.length === 0 ? (
             <Text style={styles.emptyHistory}>No stock movements recorded yet.</Text>
           ) : (
-            stockMovements.map((m, idx) => (
-              <View
-                key={m.id}
-                style={[
-                  styles.movementItem,
-                  idx === stockMovements.length - 1 && { borderBottomWidth: 0 },
-                ]}
-              >
-                <View style={styles.rowBetween}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <FontAwesome5
-                      name={
-                        m.movement_type === 'restock'
-                          ? 'plus-circle'
-                          : m.movement_type === 'sale'
-                          ? 'shopping-cart'
-                          : 'exchange-alt'
-                      }
-                      size={11}
-                      color="#64748b"
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text style={styles.movementType}>{m.movement_type}</Text>
-                  </View>
-                  <Text
-                    style={[
-                      styles.movementQuantity,
-                      { color: m.quantity > 0 ? '#047857' : '#e11d48' },
-                    ]}
-                  >
-                    {m.quantity > 0 ? `+${m.quantity}` : m.quantity} {product.unit}
-                  </Text>
-                </View>
-                <Text style={styles.movementReason}>{m.reason}</Text>
-                <View style={styles.movementFooter}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Text style={styles.stockTrack}>Stock: {m.previous_quantity}</Text>
-                    <FontAwesome5 name="arrow-right" size={8} color="#94a3b8" style={{ marginHorizontal: 4 }} />
-                    <Text style={[styles.stockTrack, { color: '#334155', fontWeight: '700' }]}>
-                      {m.new_quantity}
+            <>
+              {paginatedMovements.map((m, idx) => (
+                <View
+                  key={m.id}
+                  style={[
+                    styles.movementItem,
+                    idx === paginatedMovements.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <View style={styles.rowBetween}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <FontAwesome5
+                        name={
+                          m.movement_type === 'restock'
+                            ? 'plus-circle'
+                            : m.movement_type === 'sale'
+                            ? 'shopping-cart'
+                            : 'exchange-alt'
+                        }
+                        size={11}
+                        color="#64748b"
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={styles.movementType}>{m.movement_type}</Text>
+                    </View>
+                    <Text
+                      style={[
+                        styles.movementQuantity,
+                        { color: m.quantity > 0 ? '#047857' : '#e11d48' },
+                      ]}
+                    >
+                      {m.quantity > 0 ? `+${m.quantity}` : m.quantity} {product.unit}
                     </Text>
                   </View>
-                  <Text style={styles.timestamp}>
-                    {new Date(m.created_at).toLocaleDateString()} {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </Text>
+                  <Text style={styles.movementReason}>{m.reason}</Text>
+                  <View style={styles.movementFooter}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={styles.stockTrack}>Stock: {m.previous_quantity}</Text>
+                      <FontAwesome5 name="arrow-right" size={8} color="#94a3b8" style={{ marginHorizontal: 4 }} />
+                      <Text style={[styles.stockTrack, { color: '#334155', fontWeight: '700' }]}>
+                        {m.new_quantity}
+                      </Text>
+                    </View>
+                    <Text style={styles.timestamp}>
+                      {new Date(m.created_at).toLocaleDateString()} {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            ))
+              ))}
+              <Pagination
+                currentPage={movementsPage}
+                totalItems={stockMovements.length}
+                pageSize={PAGE_SIZE}
+                onPageChange={(p) => setMovementsPage(p)}
+                itemName="movements"
+              />
+            </>
           )}
         </View>
 
@@ -535,7 +563,25 @@ export default function ProductDetailScreen() {
                 return (
                   <Pressable
                     key={type}
-                    onPress={() => setAdjustType(type)}
+                    onPress={() => {
+                      setAdjustType(type);
+                      const currentVal = parseFloat(adjustDeltaStr);
+                      if (type === 'restock') {
+                        if (isNaN(currentVal) || currentVal < 1) {
+                          setAdjustDeltaStr('1');
+                        }
+                        if (!adjustReason || adjustReason === 'Damaged / expired items' || adjustReason === 'Physical inventory recount') {
+                          setAdjustReason('Restock shipment');
+                        }
+                      } else if (type === 'damage') {
+                        if (isNaN(currentVal) || currentVal > -1) {
+                          setAdjustDeltaStr('-1');
+                        }
+                        if (!adjustReason || adjustReason === 'Restock shipment' || adjustReason === 'Physical inventory recount') {
+                          setAdjustReason('Damaged / expired items');
+                        }
+                      }
+                    }}
                     style={[styles.typePill, isSelected && styles.typePillSelected]}
                   >
                     <Text style={[styles.typePillText, isSelected && styles.typePillTextSelected]}>
@@ -549,16 +595,36 @@ export default function ProductDetailScreen() {
             {/* Delta Input */}
             <View style={{ marginBottom: 12 }}>
               <Text style={styles.inputLabel}>
-                Quantity Change (+ to add, - to reduce)
+                {adjustType === 'restock'
+                  ? 'Quantity Change (Minimum: 1) *'
+                  : adjustType === 'damage'
+                  ? 'Quantity Change (Maximum: -1) *'
+                  : 'Quantity Change (+ to add, - to reduce) *'}
               </Text>
               <TextInput
                 value={adjustDeltaStr}
                 onChangeText={setAdjustDeltaStr}
-                placeholder="e.g. 10 or -2"
+                placeholder={
+                  adjustType === 'restock'
+                    ? 'e.g. 1, 5, 10 (minimum 1)'
+                    : adjustType === 'damage'
+                    ? 'e.g. -1, -2, -5 (maximum -1)'
+                    : 'e.g. 10 or -2'
+                }
                 placeholderTextColor="#94a3b8"
                 keyboardType="numbers-and-punctuation"
                 style={[styles.input, { fontWeight: '700', fontSize: 16 }]}
               />
+              {adjustType === 'restock' && (
+                <Text style={{ fontSize: 12, color: '#059669', marginTop: 4, fontWeight: '600' }}>
+                  ✓ Restock must be at least 1 (positive number) to add stock.
+                </Text>
+              )}
+              {adjustType === 'damage' && (
+                <Text style={{ fontSize: 12, color: '#e11d48', marginTop: 4, fontWeight: '600' }}>
+                  ⚠ Damage must be at most -1 (e.g. -1, -2) to deduct stock.
+                </Text>
+              )}
             </View>
 
             {/* Reason Input */}

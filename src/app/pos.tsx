@@ -10,18 +10,21 @@ import {
   FlatList,
 } from 'react-native';
 import { Stack } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
 import { useToast } from '@/components/ui/toast';
 import { AppButton } from '@/components/ui/app-button';
-import { BottomNavBar } from '@/components/navigation/bottom-nav-bar';
+import { AppLayout } from '@/components/navigation/app-layout';
 import { BarcodeScannerModal } from '@/components/camera/barcode-scanner-modal';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Pagination } from '@/components/ui/pagination';
 import { ProductRepository } from '@/database/repositories/product-repository';
 import { SaleRepository, type CreateSaleResult } from '@/database/repositories/sale-repository';
+import { supabase } from '@/lib/supabase';
 import { formatPHP } from '@/utils/currency';
 import { type Product } from '@/types/database';
+
+const PAGE_SIZE = 15;
 
 interface CartItem {
   product: Product;
@@ -29,13 +32,13 @@ interface CartItem {
 }
 
 export default function PosSaleScreen() {
-  const db = useSQLiteContext();
   const toast = useToast();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [page, setPage] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [tenderedInput, setTenderedInput] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
@@ -53,7 +56,7 @@ export default function PosSaleScreen() {
 
   useEffect(() => {
     let isMounted = true;
-    ProductRepository.getAll(db, { status: 'active' })
+    ProductRepository.getAll({ status: 'active' })
       .then((all) => {
         if (isMounted) {
           setProducts(all);
@@ -70,7 +73,33 @@ export default function PosSaleScreen() {
     return () => {
       isMounted = false;
     };
-  }, [db, reloadKey]);
+  }, [reloadKey]);
+
+  // Real-time synchronization for POS catalog & stock changes
+  useEffect(() => {
+    const channelId = `pos-live-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        () => {
+          ProductRepository.getAll({ status: 'active' }).then(setProducts).catch(() => {});
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'stock_movements' },
+        () => {
+          ProductRepository.getAll({ status: 'active' }).then(setProducts).catch(() => {});
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Extract unique categories
   const categories = useMemo(() => {
@@ -93,6 +122,17 @@ export default function PosSaleScreen() {
       return matchCat && matchQuery;
     });
   }, [products, searchQuery, selectedCategory]);
+
+  // Reset page when filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, selectedCategory]);
+
+  // Paginated products (15 per page)
+  const paginatedProducts = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filteredProducts.slice(start, start + PAGE_SIZE);
+  }, [filteredProducts, page]);
 
   // Cart totals
   const totalItemsCount = useMemo(() => {
@@ -122,15 +162,20 @@ export default function PosSaleScreen() {
         return;
       }
 
+      const existingItem = cart.find((i) => i.product.id === product.id);
+      if (existingItem && existingItem.quantity >= product.stock_quantity) {
+        toast.warning(
+          'Stock Limit',
+          `Cannot add more. Only ${product.stock_quantity} ${product.unit} available.`
+        );
+        return;
+      }
+
       setCart((prev) => {
         const existingIndex = prev.findIndex((i) => i.product.id === product.id);
         if (existingIndex >= 0) {
           const currentQty = prev[existingIndex].quantity;
           if (currentQty >= product.stock_quantity) {
-            toast.warning(
-              'Stock Limit',
-              `Cannot add more. Only ${product.stock_quantity} ${product.unit} available.`
-            );
             return prev;
           }
           const updated = [...prev];
@@ -144,21 +189,26 @@ export default function PosSaleScreen() {
         }
       });
     },
-    [toast]
+    [cart, toast]
   );
 
   const handleUpdateQuantity = useCallback(
     (productId: number, delta: number) => {
+      const item = cart.find((i) => i.product.id === productId);
+      if (item && delta > 0 && item.quantity + delta > item.product.stock_quantity) {
+        toast.warning(
+          'Stock Limit',
+          `Only ${item.product.stock_quantity} available in stock.`
+        );
+        return;
+      }
+
       setCart((prev) => {
         return prev
           .map((item) => {
             if (item.product.id === productId) {
               const newQty = item.quantity + delta;
               if (newQty > item.product.stock_quantity) {
-                toast.warning(
-                  'Stock Limit',
-                  `Only ${item.product.stock_quantity} available in stock.`
-                );
                 return item;
               }
               return { ...item, quantity: newQty };
@@ -168,7 +218,7 @@ export default function PosSaleScreen() {
           .filter((item) => item.quantity > 0);
       });
     },
-    [toast]
+    [cart, toast]
   );
 
   const handleRemoveFromCart = useCallback((productId: number) => {
@@ -223,7 +273,7 @@ export default function PosSaleScreen() {
 
     try {
       setSubmitting(true);
-      const saleResult = await SaleRepository.createSale(db, {
+      const saleResult = await SaleRepository.createSale({
         items: cart.map((i) => ({
           productId: i.product.id,
           quantity: i.quantity,
@@ -254,26 +304,21 @@ export default function PosSaleScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: 'Sell Products (Export / POS)',
-          headerShown: true,
-          headerStyle: { backgroundColor: '#ffffff' },
-          headerTintColor: '#059669',
-          headerTitleStyle: { fontWeight: '800' },
-          headerRight: () => (
-            <Pressable
-              onPress={() => setScannerVisible(true)}
-              style={styles.headerScanBtn}
-            >
-              <FontAwesome5 name="barcode" size={16} color="#059669" />
-              <Text style={styles.headerScanText}>Scan</Text>
-            </Pressable>
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false }} />
 
-      <SafeAreaView style={styles.safeArea} edges={['bottom', 'left', 'right']}>
+      <AppLayout
+        activeTab="pos"
+        title="Sell Products (POS)"
+        headerRight={
+          <Pressable
+            onPress={() => setScannerVisible(true)}
+            style={styles.headerScanBtn}
+          >
+            <FontAwesome5 name="barcode" size={16} color="#059669" />
+            <Text style={styles.headerScanText}>Scan</Text>
+          </Pressable>
+        }
+      >
         <View style={styles.container}>
           {/* Top Search & Category Bar */}
           <View style={styles.topBar}>
@@ -349,10 +394,19 @@ export default function PosSaleScreen() {
                 </View>
               ) : (
                 <FlatList
-                  data={filteredProducts}
+                  data={paginatedProducts}
                   keyExtractor={(item) => item.id.toString()}
                   contentContainerStyle={styles.productList}
                   showsVerticalScrollIndicator={false}
+                  ListFooterComponent={
+                    <Pagination
+                      currentPage={page}
+                      totalItems={filteredProducts.length}
+                      pageSize={PAGE_SIZE}
+                      onPageChange={(p) => setPage(p)}
+                      itemName="products"
+                    />
+                  }
                   renderItem={({ item }) => {
                     const inCartItem = cart.find((c) => c.product.id === item.id);
                     const isOutOfStock = item.stock_quantity <= 0;
@@ -678,10 +732,7 @@ export default function PosSaleScreen() {
             </View>
           </Modal>
         )}
-
-        {/* Global Bottom Navigation */}
-        <BottomNavBar activeTab="pos" />
-      </SafeAreaView>
+      </AppLayout>
     </>
   );
 }

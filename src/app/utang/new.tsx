@@ -10,7 +10,6 @@ import {
   Platform,
 } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
 import { useToast } from '@/components/ui/toast';
@@ -27,7 +26,6 @@ interface CartItem {
 }
 
 export default function NewUtangScreen() {
-  const db = useSQLiteContext();
   const toast = useToast();
   const params = useLocalSearchParams<{ customerId?: string }>();
 
@@ -55,8 +53,8 @@ export default function NewUtangScreen() {
     let isMounted = true;
 
     Promise.all([
-      CustomerRepository.getAll(db),
-      ProductRepository.getAll(db, { status: 'active' }),
+      CustomerRepository.getAll(),
+      ProductRepository.getAll({ status: 'active' }),
     ])
       .then(([custList, prodList]) => {
         if (isMounted) {
@@ -73,7 +71,7 @@ export default function NewUtangScreen() {
     return () => {
       isMounted = false;
     };
-  }, [db]);
+  }, []);
 
   // Filtered customers for picker
   const filteredCustomers = useMemo(() => {
@@ -112,21 +110,24 @@ export default function NewUtangScreen() {
       return;
     }
 
+    const existing = cart.find((item) => item.product.id === product.id);
+    if (existing && existing.quantity >= product.stock_quantity) {
+      toast.warning(
+        'Maximum Stock Reached',
+        `Only ${product.stock_quantity} available for "${product.name}".`
+      );
+      return;
+    }
+
     setCart((prev) => {
-      const existing = prev.find((item) => item.product.id === product.id);
-      if (existing) {
-        if (existing.quantity >= product.stock_quantity) {
-          toast.warning(
-            'Maximum Stock Reached',
-            `Only ${product.stock_quantity} available for "${product.name}".`
-          );
-          return prev;
-        }
-        return prev.map((item) =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
-        );
+      const existingIdx = prev.findIndex((item) => item.product.id === product.id);
+      if (existingIdx >= 0) {
+        const updated = [...prev];
+        updated[existingIdx] = {
+          ...updated[existingIdx],
+          quantity: updated[existingIdx].quantity + 1,
+        };
+        return updated;
       }
       return [...prev, { product, quantity: 1 }];
     });
@@ -134,24 +135,25 @@ export default function NewUtangScreen() {
   };
 
   const updateQuantity = (productId: number, delta: number) => {
-    setCart((prev) => {
-      return prev
-        .map((item) => {
-          if (item.product.id === productId) {
-            const newQty = item.quantity + delta;
-            if (newQty > item.product.stock_quantity) {
-              toast.warning(
-                'Insufficient Stock',
-                `Only ${item.product.stock_quantity} available in inventory.`
-              );
-              return item;
-            }
-            return { ...item, quantity: newQty };
-          }
-          return item;
-        })
-        .filter((item) => item.quantity > 0);
-    });
+    const existing = cart.find((item) => item.product.id === productId);
+    if (!existing) return;
+
+    const newQty = existing.quantity + delta;
+    if (delta > 0 && newQty > existing.product.stock_quantity) {
+      toast.warning(
+        'Insufficient Stock',
+        `Only ${existing.product.stock_quantity} available in inventory.`
+      );
+      return;
+    }
+
+    setCart((prev) =>
+      prev
+        .map((item) =>
+          item.product.id === productId ? { ...item, quantity: newQty } : item
+        )
+        .filter((item) => item.quantity > 0)
+    );
   };
 
   const removeFromCart = (productId: number) => {
@@ -203,7 +205,6 @@ export default function NewUtangScreen() {
         }
         // createOrGet resolves existing customer if same name exists
         const cust = await CustomerRepository.createOrGet(
-          db,
           newCustomerName,
           newCustomerPhone,
           notes
@@ -216,7 +217,7 @@ export default function NewUtangScreen() {
       }
 
       // Record transaction
-      const result = await CustomerRepository.recordCreditTransaction(db, {
+      const result = await CustomerRepository.recordCreditTransaction({
         customerId: targetCustomerId,
         items: cart.map((item) => ({
           productId: item.product.id,

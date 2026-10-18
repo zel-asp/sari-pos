@@ -1,4 +1,4 @@
-import { type SQLiteDatabase } from 'expo-sqlite';
+import { supabase } from '@/lib/supabase';
 import {
   type Customer,
   type CreditTransaction,
@@ -36,70 +36,74 @@ export const CustomerRepository = {
   /**
    * Retrieves all customers with optional search and filters.
    */
-  async getAll(db: SQLiteDatabase, filter: CustomerFilter = {}): Promise<Customer[]> {
-    const params: (string | number)[] = [];
-    const conditions: string[] = ['is_active = 1'];
+  async getAll(arg1?: any, arg2?: CustomerFilter): Promise<Customer[]> {
+    const filter: CustomerFilter = (arg2 || (arg1 && typeof arg1 === 'object' && !arg1.getAllAsync ? arg1 : {})) || {};
 
-    if (filter.search && filter.search.trim()) {
-      conditions.push('(name LIKE ? OR contact_number LIKE ?)');
-      const searchParam = `%${filter.search.trim()}%`;
-      params.push(searchParam, searchParam);
-    }
+    let query = supabase.from('customers').select('*').eq('is_active', 1);
 
     if (filter.hasBalanceOnly) {
-      conditions.push('outstanding_balance > 0');
+      query = query.gt('outstanding_balance', 0);
     }
 
-    let orderBy = 'outstanding_balance DESC, updated_at DESC';
+    if (filter.search && filter.search.trim()) {
+      const searchParam = filter.search.trim();
+      query = query.or(`name.ilike.%${searchParam}%,contact_number.ilike.%${searchParam}%`);
+    }
+
     if (filter.sortBy === 'name') {
-      orderBy = 'name ASC';
+      query = query.order('name', { ascending: true });
     } else if (filter.sortBy === 'recent') {
-      orderBy = 'last_transaction_date DESC, updated_at DESC';
-    } else if (filter.sortBy === 'balance') {
-      orderBy = 'outstanding_balance DESC';
+      query = query.order('last_transaction_date', { ascending: false, nullsFirst: false });
+    } else {
+      query = query.order('outstanding_balance', { ascending: false });
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const query = `
-      SELECT c.*,
-        (
-          SELECT GROUP_CONCAT(ci.quantity || 'x ' || ci.product_name_snapshot, ' • ')
-          FROM credit_transaction_items ci
-          JOIN credit_transactions ct ON ci.credit_transaction_id = ct.id
-          WHERE ct.customer_id = c.id
-          ORDER BY ci.id DESC
-          LIMIT 4
-        ) as recent_items
-      FROM customers c
-      ${whereClause}
-      ORDER BY ${orderBy};
-    `;
+    const { data, error } = await query;
+    if (error) {
+      console.error('[Supabase] Error getting customers:', error);
+      throw error;
+    }
 
-    return await db.getAllAsync<Customer>(query, params);
+    return (data as Customer[]) || [];
   },
 
   /**
    * Retrieves a customer by their ID.
    */
-  async getById(db: SQLiteDatabase, id: number): Promise<Customer | null> {
-    const row = await db.getFirstAsync<Customer>(
-      `SELECT * FROM customers WHERE id = ?;`,
-      [id]
-    );
-    return row ?? null;
+  async getById(arg1: any, arg2?: number): Promise<Customer | null> {
+    const id = typeof arg1 === 'number' ? arg1 : arg2!;
+
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Supabase] Error getting customer by id:', error);
+      throw error;
+    }
+    return data;
   },
 
   /**
    * Retrieves a customer by exact name (case-insensitive).
    */
-  async getByName(db: SQLiteDatabase, name: string): Promise<Customer | null> {
-    const trimmed = name.trim();
-    if (!trimmed) return null;
-    const row = await db.getFirstAsync<Customer>(
-      `SELECT * FROM customers WHERE name = ? COLLATE NOCASE;`,
-      [trimmed]
-    );
-    return row ?? null;
+  async getByName(arg1: any, arg2?: string): Promise<Customer | null> {
+    const name = (typeof arg1 === 'string' ? arg1 : arg2 || '').trim();
+    if (!name) return null;
+
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .ilike('name', name)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Supabase] Error getting customer by name:', error);
+      throw error;
+    }
+    return data;
   },
 
   /**
@@ -107,54 +111,78 @@ export const CustomerRepository = {
    * Prevents creating duplicate records for the same person.
    */
   async createOrGet(
-    db: SQLiteDatabase,
-    name: string,
-    contactNumber?: string,
-    notes?: string
+    arg1: any,
+    arg2?: string,
+    arg3?: string,
+    arg4?: string
   ): Promise<Customer> {
+    let name: string;
+    let contactNumber: string | undefined;
+    let notes: string | undefined;
+
+    if (typeof arg1 === 'string') {
+      name = arg1;
+      contactNumber = arg2;
+      notes = arg3;
+    } else {
+      name = arg2!;
+      contactNumber = arg3;
+      notes = arg4;
+    }
+
     const trimmedName = name.trim();
     if (!trimmedName) {
       throw new Error('Customer name cannot be empty.');
     }
 
-    // Check if customer already exists
-    const existing = await this.getByName(db, trimmedName);
+    const existing = await this.getByName(trimmedName);
     if (existing) {
-      // If contact or notes provided, update them if currently blank
       if ((contactNumber && !existing.contact_number) || (notes && !existing.notes)) {
         const now = new Date().toISOString();
-        await db.runAsync(
-          `UPDATE customers 
-           SET contact_number = COALESCE(?, contact_number),
-               notes = COALESCE(?, notes),
-               updated_at = ?
-           WHERE id = ?;`,
-          [contactNumber?.trim() || null, notes?.trim() || null, now, existing.id]
-        );
-        return (await this.getById(db, existing.id))!;
+        const { data: updated } = await supabase
+          .from('customers')
+          .update({
+            contact_number: contactNumber?.trim() || existing.contact_number,
+            notes: notes?.trim() || existing.notes,
+            updated_at: now,
+          })
+          .eq('id', existing.id)
+          .select()
+          .single();
+
+        return updated || existing;
       }
       return existing;
     }
 
-    // Create new customer
     const now = new Date().toISOString();
-    const result = await db.runAsync(
-      `INSERT INTO customers (
-         name, contact_number, notes, total_credit_amount, total_paid_amount,
-         outstanding_balance, transaction_count, is_active, created_at, updated_at
-       ) VALUES (?, ?, ?, 0, 0, 0, 0, 1, ?, ?);`,
-      [trimmedName, contactNumber?.trim() || null, notes?.trim() || null, now, now]
-    );
+    const { data: created, error } = await supabase
+      .from('customers')
+      .insert({
+        name: trimmedName,
+        contact_number: contactNumber?.trim() || null,
+        notes: notes?.trim() || null,
+        total_credit_amount: 0,
+        total_paid_amount: 0,
+        outstanding_balance: 0,
+        transaction_count: 0,
+        is_active: 1,
+        created_at: now,
+        updated_at: now,
+      })
+      .select()
+      .single();
 
-    const created = await this.getById(db, result.lastInsertRowId);
-    if (!created) {
-      throw new Error('Failed to retrieve newly created customer.');
+    if (error || !created) {
+      console.error('[Supabase] Failed to create customer:', error);
+      throw error || new Error('Failed to create customer');
     }
+
     return created;
   },
 
   /**
-   * Records a new credit/utang borrowing transaction atomically:
+   * Records a new credit/utang borrowing transaction:
    * 1. Validates available stock for each product.
    * 2. Deducts borrowed quantities from product inventory.
    * 3. Creates stock movement logs.
@@ -162,9 +190,10 @@ export const CustomerRepository = {
    * 5. Updates customer outstanding balance and transaction count.
    */
   async recordCreditTransaction(
-    db: SQLiteDatabase,
-    input: RecordCreditTransactionInput
+    arg1: any,
+    arg2?: RecordCreditTransactionInput
   ): Promise<{ transaction: CreditTransaction; customer: Customer }> {
+    const input: RecordCreditTransactionInput = arg2 ? arg2 : arg1;
     const { customerId, items, notes } = input;
     const transactionDate = input.transactionDate || new Date().toISOString();
 
@@ -172,172 +201,151 @@ export const CustomerRepository = {
       throw new Error('Credit transaction must contain at least one product item.');
     }
 
-    let createdTxId = 0;
-    let txNumber = '';
+    const customer = await this.getById(customerId);
+    if (!customer) {
+      throw new Error(`Customer with ID ${customerId} not found.`);
+    }
 
-    await db.withTransactionAsync(async () => {
-      // 1. Fetch customer
-      const customer = await db.getFirstAsync<Customer>(
-        `SELECT * FROM customers WHERE id = ?;`,
-        [customerId]
-      );
-      if (!customer) {
-        throw new Error(`Customer with ID ${customerId} not found.`);
+    const productIds = items.map((it) => it.productId);
+    const { data: products, error: prodErr } = await supabase
+      .from('products')
+      .select('id, name, barcode, cost_price, selling_price, stock_quantity')
+      .in('id', productIds);
+
+    if (prodErr || !products) {
+      throw new Error(`Failed to load products: ${prodErr?.message}`);
+    }
+
+    const productMap = new Map<number, (typeof products)[0]>();
+    for (const p of products) productMap.set(p.id, p);
+
+    let grandTotal = 0;
+    const preparedItems = [];
+
+    for (const it of items) {
+      if (it.quantity <= 0) {
+        throw new Error('Quantity must be greater than zero.');
       }
-
-      // 2. Validate products and stock availability
-      type ItemSnapshot = {
-        productId: number;
-        productName: string;
-        barcode: string | null;
-        quantity: number;
-        unitCost: number;
-        unitPrice: number;
-        subtotal: number;
-        currentStock: number;
-      };
-
-      const preparedItems: ItemSnapshot[] = [];
-      let grandTotal = 0;
-
-      for (const item of items) {
-        if (item.quantity <= 0) {
-          throw new Error('Item quantity must be greater than zero.');
-        }
-
-        const product = await db.getFirstAsync<{
-          id: number;
-          name: string;
-          barcode: string | null;
-          cost_price: number;
-          selling_price: number;
-          stock_quantity: number;
-        }>(
-          `SELECT id, name, barcode, cost_price, selling_price, stock_quantity FROM products WHERE id = ?;`,
-          [item.productId]
-        );
-
-        if (!product) {
-          throw new Error(`Product ID ${item.productId} does not exist.`);
-        }
-
-        if (product.stock_quantity < item.quantity) {
-          throw new Error(
-            `Insufficient stock for "${product.name}". Available: ${product.stock_quantity}, Requested: ${item.quantity}.`
-          );
-        }
-
-        const subtotal = Math.round(item.quantity * product.selling_price);
-        grandTotal += subtotal;
-
-        preparedItems.push({
-          productId: product.id,
-          productName: product.name,
-          barcode: product.barcode,
-          quantity: item.quantity,
-          unitCost: product.cost_price,
-          unitPrice: product.selling_price,
-          subtotal,
-          currentStock: product.stock_quantity,
-        });
+      const p = productMap.get(it.productId);
+      if (!p) {
+        throw new Error(`Product ID ${it.productId} not found.`);
       }
-
-      // 3. Generate transaction number (e.g. CR-20261018-1234)
-      const datePart = transactionDate.slice(0, 10).replace(/-/g, '');
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      txNumber = `CR-${datePart}-${randomSuffix}`;
-
-      // 4. Insert credit transaction
-      const txResult = await db.runAsync(
-        `INSERT INTO credit_transactions (
-           customer_id, transaction_number, transaction_date, total_amount, notes, status, created_at
-         ) VALUES (?, ?, ?, ?, ?, 'active', ?);`,
-        [customerId, txNumber, transactionDate, grandTotal, notes?.trim() || null, transactionDate]
-      );
-      createdTxId = txResult.lastInsertRowId;
-
-      // 5. Insert items, deduct inventory, and record stock movements
-      for (const pItem of preparedItems) {
-        await db.runAsync(
-          `INSERT INTO credit_transaction_items (
-             credit_transaction_id, product_id, product_name_snapshot, barcode_snapshot,
-             quantity, unit_cost_snapshot, unit_price_snapshot, subtotal
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-          [
-            createdTxId,
-            pItem.productId,
-            pItem.productName,
-            pItem.barcode,
-            pItem.quantity,
-            pItem.unitCost,
-            pItem.unitPrice,
-            pItem.subtotal,
-          ]
-        );
-
-        const newStock = pItem.currentStock - pItem.quantity;
-
-        // Deduct inventory
-        await db.runAsync(
-          `UPDATE products SET stock_quantity = ?, updated_at = ? WHERE id = ?;`,
-          [newStock, transactionDate, pItem.productId]
-        );
-
-        // Record stock movement
-        await db.runAsync(
-          `INSERT INTO stock_movements (
-             product_id, movement_type, quantity, previous_quantity, new_quantity,
-             reason, reference_type, reference_id, created_at
-           ) VALUES (?, 'credit_sale', ?, ?, ?, ?, 'credit_transaction', ?, ?);`,
-          [
-            pItem.productId,
-            -pItem.quantity,
-            pItem.currentStock,
-            newStock,
-            `Utang / credit borrowed by ${customer.name}`,
-            createdTxId.toString(),
-            transactionDate,
-          ]
+      if (p.stock_quantity < it.quantity) {
+        throw new Error(
+          `Insufficient stock for "${p.name}". Available: ${p.stock_quantity}, Requested: ${it.quantity}.`
         );
       }
+      const subtotal = Math.round(it.quantity * p.selling_price);
+      grandTotal += subtotal;
 
-      // 6. Update customer balance and transaction count
-      await db.runAsync(
-        `UPDATE customers
-         SET total_credit_amount = total_credit_amount + ?,
-             outstanding_balance = outstanding_balance + ?,
-             transaction_count = transaction_count + 1,
-             last_transaction_date = ?,
-             updated_at = ?
-         WHERE id = ?;`,
-        [grandTotal, grandTotal, transactionDate, transactionDate, customerId]
-      );
-    });
+      preparedItems.push({
+        productId: p.id,
+        name: p.name,
+        barcode: p.barcode,
+        quantity: it.quantity,
+        costPrice: p.cost_price,
+        sellingPrice: p.selling_price,
+        subtotal,
+        currentStock: p.stock_quantity,
+        newStock: p.stock_quantity - it.quantity,
+      });
+    }
 
-    const transaction = await db.getFirstAsync<CreditTransaction>(
-      `SELECT * FROM credit_transactions WHERE id = ?;`,
-      [createdTxId]
-    );
-    const updatedCustomer = (await this.getById(db, customerId))!;
+    const datePart = transactionDate.slice(0, 10).replace(/-/g, '');
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const txNumber = `CR-${datePart}-${randomSuffix}`;
+
+    // Insert credit transaction
+    const { data: tx, error: txErr } = await supabase
+      .from('credit_transactions')
+      .insert({
+        customer_id: customerId,
+        transaction_number: txNumber,
+        transaction_date: transactionDate,
+        total_amount: grandTotal,
+        notes: notes?.trim() || null,
+        status: 'active',
+        created_at: transactionDate,
+      })
+      .select()
+      .single();
+
+    if (txErr || !tx) {
+      throw txErr || new Error('Failed to record credit transaction.');
+    }
+
+    // Insert line items
+    const itemsToInsert = preparedItems.map((item) => ({
+      credit_transaction_id: tx.id,
+      product_id: item.productId,
+      product_name_snapshot: item.name,
+      barcode_snapshot: item.barcode,
+      quantity: item.quantity,
+      unit_cost_snapshot: item.costPrice,
+      unit_price_snapshot: item.sellingPrice,
+      subtotal: item.subtotal,
+    }));
+    await supabase.from('credit_transaction_items').insert(itemsToInsert);
+
+    // Deduct stock and log movements
+    const movements = [];
+    for (const item of preparedItems) {
+      await supabase
+        .from('products')
+        .update({
+          stock_quantity: item.newStock,
+          updated_at: transactionDate,
+        })
+        .eq('id', item.productId);
+
+      movements.push({
+        product_id: item.productId,
+        movement_type: 'sale',
+        quantity: -item.quantity,
+        previous_quantity: item.currentStock,
+        new_quantity: item.newStock,
+        reason: `Utang / Credit borrowed by ${customer.name} (Ref: ${txNumber})`,
+        reference_type: 'sale',
+        reference_id: String(tx.id),
+        created_at: transactionDate,
+      });
+    }
+    if (movements.length > 0) {
+      await supabase.from('stock_movements').insert(movements);
+    }
+
+    // Update customer balance
+    const { data: updatedCustomer, error: custUpdateErr } = await supabase
+      .from('customers')
+      .update({
+        total_credit_amount: customer.total_credit_amount + grandTotal,
+        outstanding_balance: customer.outstanding_balance + grandTotal,
+        transaction_count: customer.transaction_count + 1,
+        last_transaction_date: transactionDate,
+        updated_at: transactionDate,
+      })
+      .eq('id', customerId)
+      .select()
+      .single();
+
+    if (custUpdateErr) {
+      console.error('[Supabase] Error updating customer balance:', custUpdateErr);
+    }
 
     return {
-      transaction: transaction!,
-      customer: updatedCustomer,
+      transaction: tx as CreditTransaction,
+      customer: (updatedCustomer as Customer) || customer,
     };
   },
 
   /**
-   * Records a customer repayment atomically:
-   * 1. Validates amount is positive and does not exceed outstanding balance.
-   * 2. Inserts customer payment record.
-   * 3. Deducts amount from customer outstanding balance.
-   * 4. Updates total_paid_amount and last_transaction_date.
-   * Does NOT touch product inventory or duplicate sales.
+   * Records a customer repayment.
    */
   async recordPayment(
-    db: SQLiteDatabase,
-    input: RecordPaymentInput
+    arg1: any,
+    arg2?: RecordPaymentInput
   ): Promise<{ payment: CustomerPayment; customer: Customer }> {
+    const input: RecordPaymentInput = arg2 ? arg2 : arg1;
     const { customerId, amount, paymentMethod = 'cash', notes } = input;
     const paymentDate = input.paymentDate || new Date().toISOString();
 
@@ -345,57 +353,60 @@ export const CustomerRepository = {
       throw new Error('Payment amount must be greater than zero.');
     }
 
-    let paymentId = 0;
+    const customer = await this.getById(customerId);
+    if (!customer) {
+      throw new Error(`Customer with ID ${customerId} not found.`);
+    }
 
-    await db.withTransactionAsync(async () => {
-      const customer = await db.getFirstAsync<Customer>(
-        `SELECT * FROM customers WHERE id = ?;`,
-        [customerId]
+    if (amount > customer.outstanding_balance) {
+      const maxPeso = (customer.outstanding_balance / 100).toFixed(2);
+      throw new Error(
+        `Payment amount (₱${(amount / 100).toFixed(2)}) cannot exceed outstanding balance of ₱${maxPeso}.`
       );
-      if (!customer) {
-        throw new Error(`Customer with ID ${customerId} not found.`);
-      }
+    }
 
-      if (amount > customer.outstanding_balance) {
-        const maxCentavos = customer.outstanding_balance;
-        const maxPeso = (maxCentavos / 100).toFixed(2);
-        throw new Error(
-          `Payment amount (₱${(amount / 100).toFixed(2)}) cannot exceed outstanding balance of ₱${maxPeso}.`
-        );
-      }
+    const datePart = paymentDate.slice(0, 10).replace(/-/g, '');
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const paymentNumber = `PAY-${datePart}-${randomSuffix}`;
 
-      const datePart = paymentDate.slice(0, 10).replace(/-/g, '');
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      const paymentNumber = `PAY-${datePart}-${randomSuffix}`;
+    const { data: payment, error: payErr } = await supabase
+      .from('customer_payments')
+      .insert({
+        customer_id: customerId,
+        payment_number: paymentNumber,
+        amount,
+        payment_date: paymentDate,
+        payment_method: paymentMethod,
+        notes: notes?.trim() || null,
+        created_at: paymentDate,
+      })
+      .select()
+      .single();
 
-      const res = await db.runAsync(
-        `INSERT INTO customer_payments (
-           customer_id, payment_number, amount, payment_date, payment_method, notes, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?);`,
-        [customerId, paymentNumber, amount, paymentDate, paymentMethod, notes?.trim() || null, paymentDate]
-      );
-      paymentId = res.lastInsertRowId;
+    if (payErr || !payment) {
+      throw payErr || new Error('Failed to record payment');
+    }
 
-      await db.runAsync(
-        `UPDATE customers
-         SET total_paid_amount = total_paid_amount + ?,
-             outstanding_balance = outstanding_balance - ?,
-             last_transaction_date = ?,
-             updated_at = ?
-         WHERE id = ?;`,
-        [amount, amount, paymentDate, paymentDate, customerId]
-      );
-    });
+    const newBalance = Math.max(0, customer.outstanding_balance - amount);
+    const { data: updatedCustomer, error: updateErr } = await supabase
+      .from('customers')
+      .update({
+        total_paid_amount: customer.total_paid_amount + amount,
+        outstanding_balance: newBalance,
+        last_transaction_date: paymentDate,
+        updated_at: paymentDate,
+      })
+      .eq('id', customerId)
+      .select()
+      .single();
 
-    const payment = await db.getFirstAsync<CustomerPayment>(
-      `SELECT * FROM customer_payments WHERE id = ?;`,
-      [paymentId]
-    );
-    const updatedCustomer = (await this.getById(db, customerId))!;
+    if (updateErr) {
+      console.error('[Supabase] Error updating customer payment totals:', updateErr);
+    }
 
     return {
-      payment: payment!,
-      customer: updatedCustomer,
+      payment: payment as CustomerPayment,
+      customer: (updatedCustomer as Customer) || customer,
     };
   },
 
@@ -403,20 +414,32 @@ export const CustomerRepository = {
    * Retrieves all credit transactions for a customer along with line items.
    */
   async getCustomerTransactions(
-    db: SQLiteDatabase,
-    customerId: number
+    arg1: any,
+    arg2?: number
   ): Promise<CreditTransaction[]> {
-    const transactions = await db.getAllAsync<CreditTransaction>(
-      `SELECT * FROM credit_transactions WHERE customer_id = ? ORDER BY transaction_date DESC;`,
-      [customerId]
-    );
+    const customerId = typeof arg1 === 'number' ? arg1 : arg2!;
+
+    const { data: txs, error } = await supabase
+      .from('credit_transactions')
+      .select('*')
+      .eq('customer_id', customerId)
+      .order('transaction_date', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase] Error getting customer transactions:', error);
+      throw error;
+    }
+
+    const transactions = (txs as CreditTransaction[]) || [];
 
     for (const tx of transactions) {
-      const items = await db.getAllAsync<CreditTransactionItem>(
-        `SELECT * FROM credit_transaction_items WHERE credit_transaction_id = ? ORDER BY id ASC;`,
-        [tx.id]
-      );
-      tx.items = items;
+      const { data: items } = await supabase
+        .from('credit_transaction_items')
+        .select('*')
+        .eq('credit_transaction_id', tx.id)
+        .order('id', { ascending: true });
+
+      tx.items = (items as CreditTransactionItem[]) || [];
     }
 
     return transactions;
@@ -426,12 +449,22 @@ export const CustomerRepository = {
    * Retrieves all payment records for a customer.
    */
   async getCustomerPayments(
-    db: SQLiteDatabase,
-    customerId: number
+    arg1: any,
+    arg2?: number
   ): Promise<CustomerPayment[]> {
-    return await db.getAllAsync<CustomerPayment>(
-      `SELECT * FROM customer_payments WHERE customer_id = ? ORDER BY payment_date DESC;`,
-      [customerId]
-    );
+    const customerId = typeof arg1 === 'number' ? arg1 : arg2!;
+
+    const { data, error } = await supabase
+      .from('customer_payments')
+      .select('*')
+      .eq('customer_id', customerId)
+      .order('payment_date', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase] Error getting customer payments:', error);
+      throw error;
+    }
+
+    return (data as CustomerPayment[]) || [];
   },
 };

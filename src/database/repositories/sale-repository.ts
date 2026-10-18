@@ -1,4 +1,4 @@
-import { type SQLiteDatabase } from 'expo-sqlite';
+import { supabase } from '@/lib/supabase';
 import { type Sale, type SaleItem, type PaymentMethod } from '@/types/database';
 
 export interface CreateSaleItemInput {
@@ -27,9 +27,10 @@ export interface CreateSaleResult {
 export const SaleRepository = {
   /**
    * Atomically records a cash or digital sale, deducts product stock,
-   * creates sale items snapshots, and logs stock movements.
+   * creates sale items snapshots, and logs stock movements in Supabase.
    */
-  async createSale(db: SQLiteDatabase, input: CreateSaleInput): Promise<CreateSaleResult> {
+  async createSale(arg1: any, arg2?: CreateSaleInput): Promise<CreateSaleResult> {
+    const input: CreateSaleInput = arg2 ? arg2 : arg1;
     const {
       items,
       amountTendered,
@@ -42,205 +43,199 @@ export const SaleRepository = {
       throw new Error('Sale must contain at least one item.');
     }
 
-    let createdSaleId = 0;
-    let receiptNumber = '';
+    // 1. Fetch current product information for all items in the sale
+    const productIds = items.map((it) => it.productId);
+    const { data: products, error: prodErr } = await supabase
+      .from('products')
+      .select('id, name, barcode, cost_price, selling_price, stock_quantity')
+      .in('id', productIds);
+
+    if (prodErr || !products) {
+      throw new Error(`Failed to verify products: ${prodErr?.message || 'Not found'}`);
+    }
+
+    const productMap = new Map<number, (typeof products)[0]>();
+    for (const p of products) {
+      productMap.set(p.id, p);
+    }
+
     let grandTotal = 0;
-    let changeAmount = 0;
+    const preparedItems = [];
 
-    await db.withTransactionAsync(async () => {
-      // 1. Validate items and verify available stock
-      type ItemPreparation = {
-        productId: number;
-        name: string;
-        barcode: string | null;
-        quantity: number;
-        costPrice: number;
-        sellingPrice: number;
-        subtotal: number;
-        previousStock: number;
-        newStock: number;
-      };
-
-      const preparedItems: ItemPreparation[] = [];
-
-      for (const it of items) {
-        if (it.quantity <= 0) {
-          throw new Error('Quantity must be greater than zero.');
-        }
-
-        const product = await db.getFirstAsync<{
-          id: number;
-          name: string;
-          barcode: string | null;
-          cost_price: number;
-          selling_price: number;
-          stock_quantity: number;
-        }>(
-          `SELECT id, name, barcode, cost_price, selling_price, stock_quantity 
-           FROM products WHERE id = ?;`,
-          [it.productId]
-        );
-
-        if (!product) {
-          throw new Error(`Product with ID ${it.productId} not found.`);
-        }
-
-        if (product.stock_quantity < it.quantity) {
-          throw new Error(
-            `Insufficient stock for "${product.name}". Available: ${product.stock_quantity}, Requested: ${it.quantity}.`
-          );
-        }
-
-        const subtotal = Math.round(it.quantity * product.selling_price);
-        grandTotal += subtotal;
-
-        preparedItems.push({
-          productId: product.id,
-          name: product.name,
-          barcode: product.barcode,
-          quantity: it.quantity,
-          costPrice: product.cost_price,
-          sellingPrice: product.selling_price,
-          subtotal,
-          previousStock: product.stock_quantity,
-          newStock: product.stock_quantity - it.quantity,
-        });
+    for (const it of items) {
+      if (it.quantity <= 0) {
+        throw new Error('Quantity must be greater than zero.');
       }
-
-      if (amountTendered < grandTotal) {
+      const prod = productMap.get(it.productId);
+      if (!prod) {
+        throw new Error(`Product with ID ${it.productId} not found.`);
+      }
+      if (prod.stock_quantity < it.quantity) {
         throw new Error(
-          `Amount tendered (${amountTendered}) cannot be less than the total sale (${grandTotal}).`
+          `Insufficient stock for "${prod.name}". Available: ${prod.stock_quantity}, Requested: ${it.quantity}.`
         );
       }
 
-      changeAmount = amountTendered - grandTotal;
+      const subtotal = Math.round(it.quantity * prod.selling_price);
+      grandTotal += subtotal;
 
-      // 2. Generate receipt number (e.g. RCP-20261018-8421)
-      const datePart = transactionDate.slice(0, 10).replace(/-/g, '');
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      receiptNumber = `RCP-${datePart}-${randomSuffix}`;
+      preparedItems.push({
+        productId: prod.id,
+        name: prod.name,
+        barcode: prod.barcode,
+        quantity: it.quantity,
+        costPrice: prod.cost_price,
+        sellingPrice: prod.selling_price,
+        subtotal,
+        previousStock: prod.stock_quantity,
+        newStock: prod.stock_quantity - it.quantity,
+      });
+    }
 
-      // 3. Insert sale header
-      const saleResult = await db.runAsync(
-        `INSERT INTO sales (
-          receipt_number,
-          transaction_date,
-          subtotal,
-          discount_amount,
-          total_amount,
-          amount_tendered,
-          change_amount,
-          payment_method,
-          status,
-          notes,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?);`,
-        [
-          receiptNumber,
-          transactionDate,
-          grandTotal,
-          0, // discount
-          grandTotal,
-          amountTendered,
-          changeAmount,
-          paymentMethod,
-          notes?.trim() || null,
-          transactionDate,
-        ]
+    // Check payment amount for cash
+    if (paymentMethod === 'cash' && amountTendered < grandTotal) {
+      throw new Error(
+        `Amount tendered (₱${(amountTendered / 100).toFixed(2)}) is less than total amount (₱${(grandTotal / 100).toFixed(2)}).`
       );
+    }
 
-      createdSaleId = saleResult.lastInsertRowId;
+    const changeAmount = paymentMethod === 'cash' ? amountTendered - grandTotal : 0;
+    const receiptNumber = `RCP-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 900 + 100)}`;
 
-      // 4. Insert each sale item and deduct inventory stock
-      for (const item of preparedItems) {
-        await db.runAsync(
-          `INSERT INTO sale_items (
-            sale_id,
-            product_id,
-            product_name_snapshot,
-            barcode_snapshot,
-            quantity,
-            unit_cost_snapshot,
-            unit_price_snapshot,
-            subtotal
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-          [
-            createdSaleId,
-            item.productId,
-            item.name,
-            item.barcode,
-            item.quantity,
-            item.costPrice,
-            item.sellingPrice,
-            item.subtotal,
-          ]
-        );
+    // 2. Insert Sale record
+    const { data: sale, error: saleErr } = await supabase
+      .from('sales')
+      .insert({
+        receipt_number: receiptNumber,
+        transaction_date: transactionDate,
+        subtotal: grandTotal,
+        discount_amount: 0,
+        total_amount: grandTotal,
+        amount_tendered: amountTendered,
+        change_amount: changeAmount,
+        payment_method: paymentMethod,
+        status: 'completed',
+        notes: notes || null,
+        created_at: transactionDate,
+      })
+      .select()
+      .single();
 
-        // Deduct product stock in products table
-        await db.runAsync(
-          `UPDATE products 
-           SET stock_quantity = ?,
-               updated_at = ?
-           WHERE id = ?;`,
-          [item.newStock, transactionDate, item.productId]
-        );
+    if (saleErr || !sale) {
+      console.error('[Supabase] Failed to create sale:', saleErr);
+      throw saleErr || new Error('Failed to create sale.');
+    }
 
-        // Record stock movement
-        await db.runAsync(
-          `INSERT INTO stock_movements (
-            product_id,
-            movement_type,
-            quantity,
-            previous_quantity,
-            new_quantity,
-            reason,
-            reference_type,
-            reference_id,
-            created_at
-          ) VALUES (?, 'sale', ?, ?, ?, ?, 'sale', ?, ?);`,
-          [
-            item.productId,
-            -item.quantity,
-            item.previousStock,
-            item.newStock,
-            `Sale ${receiptNumber}`,
-            receiptNumber,
-            transactionDate,
-          ]
-        );
-      }
-    });
+    const saleId = sale.id;
+
+    // 3. Insert Sale Items
+    const saleItemsRows = preparedItems.map((item) => ({
+      sale_id: saleId,
+      product_id: item.productId,
+      product_name_snapshot: item.name,
+      barcode_snapshot: item.barcode,
+      quantity: item.quantity,
+      unit_cost_snapshot: item.costPrice,
+      unit_price_snapshot: item.sellingPrice,
+      subtotal: item.subtotal,
+    }));
+
+    const { error: itemsErr } = await supabase.from('sale_items').insert(saleItemsRows);
+    if (itemsErr) {
+      console.error('[Supabase] Failed to insert sale items:', itemsErr);
+    }
+
+    // 4. Update product stock quantities & record stock movements
+    const movementsRows = [];
+    for (const item of preparedItems) {
+      await supabase
+        .from('products')
+        .update({
+          stock_quantity: item.newStock,
+          updated_at: transactionDate,
+        })
+        .eq('id', item.productId);
+
+      movementsRows.push({
+        product_id: item.productId,
+        movement_type: 'sale',
+        quantity: -item.quantity,
+        previous_quantity: item.previousStock,
+        new_quantity: item.newStock,
+        reason: `Sold via receipt #${receiptNumber}`,
+        reference_type: 'sale',
+        reference_id: String(saleId),
+        created_at: transactionDate,
+      });
+    }
+
+    if (movementsRows.length > 0) {
+      await supabase.from('stock_movements').insert(movementsRows);
+    }
 
     return {
-      saleId: createdSaleId,
+      saleId,
       receiptNumber,
       totalAmount: grandTotal,
       amountTendered,
       changeAmount,
-      itemsCount: items.length,
+      itemsCount: preparedItems.length,
       transactionDate,
     };
   },
 
   /**
-   * Fetches recent sales transactions.
+   * Retrieves the latest sales transactions.
    */
-  async getRecent(db: SQLiteDatabase, limit = 20): Promise<Sale[]> {
-    return await db.getAllAsync<Sale>(
-      `SELECT * FROM sales 
-       ORDER BY transaction_date DESC, id DESC 
-       LIMIT ?;`,
-      [limit]
-    );
+  async getRecentSales(arg1?: any, arg2?: number): Promise<Sale[]> {
+    const limit = typeof arg1 === 'number' ? arg1 : typeof arg2 === 'number' ? arg2 : 20;
+
+    const { data, error } = await supabase
+      .from('sales')
+      .select('*')
+      .eq('status', 'completed')
+      .order('transaction_date', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('[Supabase] Error getting recent sales:', error);
+      throw error;
+    }
+    return (data as Sale[]) || [];
   },
 
   /**
-   * Fetches sale items for a given sale ID.
+   * Retrieves a sale transaction along with all its snapshot line items.
    */
-  async getSaleItems(db: SQLiteDatabase, saleId: number): Promise<SaleItem[]> {
-    return await db.getAllAsync<SaleItem>(
-      `SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id ASC;`,
-      [saleId]
-    );
+  async getSaleWithItems(
+    arg1: any,
+    arg2?: number
+  ): Promise<{ sale: Sale; items: SaleItem[] } | null> {
+    const saleId = typeof arg1 === 'number' ? arg1 : arg2!;
+
+    const { data: sale, error: saleErr } = await supabase
+      .from('sales')
+      .select('*')
+      .eq('id', saleId)
+      .maybeSingle();
+
+    if (saleErr || !sale) {
+      return null;
+    }
+
+    const { data: items, error: itemsErr } = await supabase
+      .from('sale_items')
+      .select('*')
+      .eq('sale_id', saleId)
+      .order('id', { ascending: true });
+
+    if (itemsErr) {
+      console.error('[Supabase] Error getting sale items:', itemsErr);
+    }
+
+    return {
+      sale: sale as Sale,
+      items: (items as SaleItem[]) || [],
+    };
   },
 };

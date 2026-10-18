@@ -1,8 +1,7 @@
-import { BottomNavBar } from "@/components/navigation/bottom-nav-bar";
+import { AppLayout } from "@/components/navigation/app-layout";
 import { AppButton } from "@/components/ui/app-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { seedDemoProducts } from "@/database";
 import { DashboardRepository } from "@/database/repositories/dashboard-repository";
 import { ProductRepository } from "@/database/repositories/product-repository";
 import {
@@ -13,8 +12,8 @@ import {
 import { formatPHP } from "@/utils/currency";
 import { FontAwesome, FontAwesome5 } from "@expo/vector-icons";
 import { router, Stack, useFocusEffect } from "expo-router";
-import { useSQLiteContext } from "expo-sqlite";
-import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import { useCallback, useEffect, useState, useRef } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -26,7 +25,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function DashboardScreen() {
-  const db = useSQLiteContext();
   const toast = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -36,84 +34,166 @@ export default function DashboardScreen() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [realtimePulse, setRealtimePulse] = useState(false);
+
+  const fetchStoreName = async (): Promise<string> => {
+    try {
+      const { data } = await supabase
+        .from('store_settings')
+        .select('value')
+        .eq('key', 'store_name')
+        .maybeSingle();
+      return data?.value || "My Sari-Sari Store";
+    } catch {
+      return "My Sari-Sari Store";
+    }
+  };
+
+  const isFetchingRef = useRef(false);
+
+  const fetchDashboardData = useCallback(
+    async (showLoading = true) => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+      if (showLoading) setLoading(true);
+      try {
+        const [name, allProducts, summaryData] = await Promise.all([
+          fetchStoreName(),
+          ProductRepository.getAll({ status: "all" }),
+          DashboardRepository.getSummary(period),
+        ]);
+        if (name) setStoreName(name);
+        setProducts(allProducts);
+        setSummary(summaryData);
+      } catch (err) {
+        console.error("[Dashboard] Error loading data:", err);
+      } finally {
+        isFetchingRef.current = false;
+        if (showLoading) setLoading(false);
+      }
+    },
+    [period]
+  );
 
   useEffect(() => {
-    let isMounted = true;
+    fetchDashboardData(true);
+  }, [fetchDashboardData, reloadKey]);
 
-    Promise.all([
-      db.getFirstAsync<{ value: string }>(
-        `SELECT value FROM store_settings WHERE key = 'store_name';`,
-      ),
-      ProductRepository.getAll(db, { status: "all" }),
-      DashboardRepository.getSummary(db, period),
-    ])
-      .then(([setting, allProducts, summaryData]) => {
-        if (isMounted) {
-          if (setting?.value) setStoreName(setting.value);
-          setProducts(allProducts);
-          setSummary(summaryData);
-          setLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (isMounted) {
-          console.error("[Dashboard] Error loading data:", err);
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [db, period, reloadKey]);
+  const fetchDashboardDataRef = useRef(fetchDashboardData);
+  useEffect(() => {
+    fetchDashboardDataRef.current = fetchDashboardData;
+  }, [fetchDashboardData]);
 
   // Real-time synchronization whenever user returns to Dashboard screen
   useFocusEffect(
     useCallback(() => {
-      let isMounted = true;
-      Promise.all([
-        db.getFirstAsync<{ value: string }>(
-          `SELECT value FROM store_settings WHERE key = 'store_name';`,
-        ),
-        ProductRepository.getAll(db, { status: "all" }),
-        DashboardRepository.getSummary(db, period),
-      ])
-        .then(([setting, allProducts, summaryData]) => {
-          if (isMounted) {
-            if (setting?.value) setStoreName(setting.value);
-            setProducts(allProducts);
-            setSummary(summaryData);
-          }
-        })
-        .catch(() => {});
-
-      return () => {
-        isMounted = false;
-      };
-    }, [db, period]),
+      fetchDashboardDataRef.current(false);
+    }, [])
   );
 
-  // Background auto-refresh every 8 seconds for live stats
+  // Supabase Real-time Channel for Sales, Products, Inventory, Utang, Payments & Expenses
   useEffect(() => {
-    const timer = setInterval(() => {
-      Promise.all([
-        ProductRepository.getAll(db, { status: "all" }),
-        DashboardRepository.getSummary(db, period),
-      ])
-        .then(([allProducts, summaryData]) => {
-          setProducts(allProducts);
-          setSummary(summaryData);
-        })
-        .catch(() => {});
-    }, 8000);
+    const channelId = `dashboard-live-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "sales" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "sale_items" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "products" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "stock_movements" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "customers" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "credit_transactions" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "credit_transaction_items" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "customer_payments" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "expenses" },
+        () => {
+          setRealtimePulse(true);
+          setTimeout(() => setRealtimePulse(false), 2000);
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "store_settings" },
+        () => {
+          fetchDashboardDataRef.current(false);
+        }
+      )
+      .subscribe();
 
-    return () => clearInterval(timer);
-  }, [db, period]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const loadDashboardData = useCallback(() => {
-    setLoading(true);
-    setReloadKey((k) => k + 1);
-  }, []);
+    fetchDashboardData(true);
+  }, [fetchDashboardData]);
 
   // Derived stock metrics from local database
   const totalProducts = products.length;
@@ -122,24 +202,6 @@ export default function DashboardScreen() {
   );
   const outOfStockProducts = products.filter((p) => p.stock_quantity <= 0);
 
-  const handleSeedData = async () => {
-    try {
-      setSeeding(true);
-      await seedDemoProducts(db);
-      loadDashboardData();
-      toast.success(
-        "Sample Data Loaded!",
-        "Demo sari-sari store products and sample customer credit loaded.",
-      );
-    } catch (err) {
-      toast.error(
-        "Failed to Seed Data",
-        err instanceof Error ? err.message : "Database error occurred.",
-      );
-    } finally {
-      setSeeding(false);
-    }
-  };
 
   const periodLabel =
     period === "today"
@@ -151,7 +213,7 @@ export default function DashboardScreen() {
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
+      <AppLayout activeTab="dashboard" title={storeName}>
         <ScrollView
           style={styles.container}
           contentContainerStyle={styles.content}
@@ -169,9 +231,16 @@ export default function DashboardScreen() {
             <View>
               <View style={styles.badgeRow}>
                 <FontAwesome5 name="store" size={12} color="#059669" />
-                <Text style={styles.badgeText}>Offline Sari-Sari POS</Text>
+                <Text style={styles.badgeText}>Sari-Sari Store POS</Text>
               </View>
               <Text style={styles.storeName}>{storeName}</Text>
+            </View>
+
+            <View style={[styles.realtimePill, realtimePulse && styles.realtimePillPulsing]}>
+              <View style={[styles.realtimeDot, realtimePulse && styles.realtimeDotPulsing]} />
+              <Text style={[styles.realtimeText, realtimePulse && styles.realtimeTextPulsing]}>
+                {realtimePulse ? "Updated live" : "Realtime"}
+              </Text>
             </View>
           </View>
 
@@ -282,6 +351,21 @@ export default function DashboardScreen() {
               </View>
               <Text style={styles.actionCardTitle}>New Utang</Text>
               <Text style={styles.actionCardSubtitle}>Record Credit</Text>
+            </Pressable>
+
+            {/* Overview & Charts Card */}
+            <Pressable
+              onPress={() => router.push("/overview")}
+              style={({ pressed }) => [
+                styles.actionCardWhite,
+                pressed && styles.cardPressed,
+              ]}
+            >
+              <View style={styles.actionIconBoxEmerald}>
+                <FontAwesome5 name="chart-line" size={16} color="#059669" />
+              </View>
+              <Text style={styles.actionCardTitle}>Overview & Charts</Text>
+              <Text style={styles.actionCardSubtitle}>Capital, Loss & Profit</Text>
             </Pressable>
           </View>
 
@@ -859,35 +943,20 @@ export default function DashboardScreen() {
               </View>
               <Text style={styles.emptyTitle}>Your Store is Ready!</Text>
               <Text style={styles.emptySubtitle}>
-                The local SQLite database is active and ready for offline use.
-                Add your products manually or load sample sari-sari store items
-                with customer credit.
+                Your store inventory is empty. Add your products to start selling and tracking sales.
               </Text>
 
               <AppButton
-                onPress={handleSeedData}
-                title="Load Sample Sari-Sari Data"
-                loading={seeding}
-                loadingText="Seeding Sample Data..."
-                icon={<FontAwesome5 name="bolt" size={13} color="#ffffff" />}
-                size="md"
-                style={{ width: "100%", marginBottom: 8 }}
-              />
-
-              <AppButton
                 onPress={() => router.push("/products/new")}
-                title="Or add product manually"
-                variant="outline"
-                icon={<FontAwesome name="plus" size={12} color="#059669" />}
-                size="sm"
+                title="Add Your First Product"
+                icon={<FontAwesome name="plus" size={12} color="#ffffff" />}
+                size="md"
+                style={{ width: "100%" }}
               />
             </View>
           )}
         </ScrollView>
-
-        {/* Bottom Navigation Bar */}
-        <BottomNavBar activeTab="dashboard" />
-      </SafeAreaView>
+      </AppLayout>
     </>
   );
 }
@@ -929,6 +998,40 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: "#0f172a",
     letterSpacing: -0.4,
+  },
+  realtimePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
+  realtimePillPulsing: {
+    backgroundColor: "#dcfce7",
+    borderColor: "#4ade80",
+  },
+  realtimeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#10b981",
+    marginRight: 5,
+  },
+  realtimeDotPulsing: {
+    backgroundColor: "#059669",
+  },
+  realtimeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#059669",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  realtimeTextPulsing: {
+    color: "#047857",
   },
   dbStatusPill: {
     flexDirection: "row",
