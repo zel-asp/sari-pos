@@ -2,8 +2,8 @@ export interface ScannedReceiptItem {
   id: string;
   name: string;
   quantity: number;
-  costPrice: number; // In Pesos (e.g. 41.50)
-  sellingPrice: number; // In Pesos (e.g. 48.00 with markup)
+  costPrice: number;
+  sellingPrice: number;
   category: string;
   unit: string;
   barcode?: string;
@@ -17,21 +17,21 @@ export interface ReceiptScanResult {
 }
 
 const DEFAULT_CATEGORIES = [
-  'Beverages',
-  'Instant Noodles',
-  'Canned Goods',
-  'Snacks & Candies',
-  'Condiments',
-  'Rice & Grains',
-  'Personal Care',
-  'Household',
-  'Fresh Food',
-  'General',
+  "Beverages",
+  "Instant Noodles",
+  "Canned Goods",
+  "Snacks & Candies",
+  "Condiments",
+  "Rice & Grains",
+  "Personal Care",
+  "Household",
+  "Fresh Food",
+  "General",
 ];
 
 export async function parseReceiptWithGemini(
   base64Image: string,
-  mimeType: string = 'image/jpeg'
+  mimeType: string = "image/jpeg",
 ): Promise<ReceiptScanResult> {
   const apiKey =
     process.env.EXPO_PUBLIC_GEMINI_API_KEY ||
@@ -39,16 +39,16 @@ export async function parseReceiptWithGemini(
 
   if (!apiKey) {
     throw new Error(
-      'Gemini API Key is not configured. Please check your .env file for EXPO_PUBLIC_GEMINI_API_KEY.'
+      "Gemini API Key is not configured. Please check your .env file for EXPO_PUBLIC_GEMINI_API_KEY.",
     );
   }
 
   const model =
     process.env.EXPO_PUBLIC_GEMINI_MODEL ||
     process.env.GEMINI_SUPPLYCHAIN_MODEL ||
-    'gemini-3.5-flash-lite';
+    "gemini-3.5-flash-lite";
 
-  const cleanBase64 = base64Image.replace(/^data:image\/[a-z]+;base64,/, '');
+  const cleanBase64 = base64Image.replace(/^data:image\/[a-z]+;base64,/, "");
 
   const prompt = `You are an expert grocery and sari-sari store receipt OCR reader.
 Carefully examine this receipt image (note: it may be rotated or angled).
@@ -83,9 +83,9 @@ Return ONLY a valid JSON object with this exact schema:
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         contents: [
@@ -103,7 +103,7 @@ Return ONLY a valid JSON object with this exact schema:
         ],
         generationConfig: {
           temperature: 0.1,
-          responseMimeType: 'application/json',
+          responseMimeType: "application/json",
         },
       }),
     });
@@ -114,50 +114,57 @@ Return ONLY a valid JSON object with this exact schema:
     }
 
     const json = await response.json();
-    const rawText =
-      json.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     if (!rawText) {
-      throw new Error('No response returned by Gemini.');
+      throw new Error("No response returned by Gemini.");
     }
 
     return rawText;
   };
 
-  let rawJsonText = '';
+  let rawJsonText = "";
   try {
     rawJsonText = await callModel(model);
   } catch (err) {
-    console.warn(`[Gemini] Error with ${model}, falling back to gemini-3.8-flash:`, err);
-    rawJsonText = await callModel('gemini-3.8-flash');
+    console.warn(
+      `[Gemini] Error with ${model}, falling back to gemini-3.8-flash:`,
+      err,
+    );
+    rawJsonText = await callModel("gemini-3.8-flash");
   }
 
   // Parse JSON
   let cleaned = rawJsonText.trim();
-  if (cleaned.startsWith('```json')) {
-    cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '').trim();
-  } else if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```/, '').replace(/```$/, '').trim();
+  if (cleaned.startsWith("```json")) {
+    cleaned = cleaned
+      .replace(/^```json/, "")
+      .replace(/```$/, "")
+      .trim();
+  } else if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```/, "").replace(/```$/, "").trim();
   }
 
   const parsed = JSON.parse(cleaned);
   const itemsList = Array.isArray(parsed.items) ? parsed.items : [];
 
-  const items: ScannedReceiptItem[] = itemsList.map((it: any, index: number) => {
-    const cost = Number(it.unit_cost) || 0;
-    const defaultSelling =
-      Number(it.suggested_selling_price) || Math.ceil(cost * 1.15 * 2) / 2;
+  const items: ScannedReceiptItem[] = itemsList.map(
+    (it: any, index: number) => {
+      const cost = Number(it.unit_cost) || 0;
+      const defaultSelling =
+        Number(it.suggested_selling_price) || Math.ceil(cost * 1.15 * 2) / 2;
 
-    return {
-      id: `scanned-${Date.now()}-${index}`,
-      name: String(it.name || 'Unknown Product').trim(),
-      quantity: Math.max(1, Number(it.quantity) || 1),
-      costPrice: cost,
-      sellingPrice: defaultSelling,
-      category: String(it.category || 'General').trim(),
-      unit: String(it.unit || 'piece').trim(),
-    };
-  });
+      return {
+        id: `scanned-${Date.now()}-${index}`,
+        name: String(it.name || "Unknown Product").trim(),
+        quantity: Math.max(1, Number(it.quantity) || 1),
+        costPrice: cost,
+        sellingPrice: defaultSelling,
+        category: String(it.category || "General").trim(),
+        unit: String(it.unit || "piece").trim(),
+      };
+    },
+  );
 
   return {
     storeName: parsed.store_name || undefined,
