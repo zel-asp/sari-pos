@@ -45,8 +45,9 @@ export default function PosSaleScreen() {
   const [scannerVisible, setScannerVisible] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // Success Receipt Modal
+  // Success Receipt Modal & Confirmation Modal
   const [completedSale, setCompletedSale] = useState<CreateSaleResult | null>(null);
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [minimized, setMinimized] = useState(false);
 
   const loadProducts = useCallback(() => {
@@ -156,10 +157,10 @@ export default function PosSaleScreen() {
 
   // Add product to cart or increment
   const handleAddToCart = useCallback(
-    (product: Product) => {
+    (product: Product): boolean => {
       if (product.stock_quantity <= 0) {
         toast.warning('Out of Stock', `"${product.name}" has 0 stock remaining.`);
-        return;
+        return false;
       }
 
       const existingItem = cart.find((i) => i.product.id === product.id);
@@ -168,7 +169,7 @@ export default function PosSaleScreen() {
           'Stock Limit',
           `Cannot add more. Only ${product.stock_quantity} ${product.unit} available.`
         );
-        return;
+        return false;
       }
 
       setCart((prev) => {
@@ -188,6 +189,7 @@ export default function PosSaleScreen() {
           return [...prev, { product, quantity: 1 }];
         }
       });
+      return true;
     },
     [cart, toast]
   );
@@ -239,25 +241,73 @@ export default function PosSaleScreen() {
     setTenderedInput((totalAmountCentavos / 100).toFixed(2));
   }, [totalAmountCentavos]);
 
-  // Barcode scanned handler
+  // Handler for scanning via camera OR entering barcode/query and pressing Enter
+  const handleScanOrEnterProduct = useCallback(
+    (inputCode: string) => {
+      const q = inputCode.trim();
+      if (!q) return;
+
+      // 1. Search exact barcode match across all active products
+      let matched = products.find(
+        (p) => p.barcode && p.barcode.trim().toLowerCase() === q.toLowerCase()
+      );
+
+      // 2. If not matched by barcode, search exact product name (case-insensitive)
+      if (!matched) {
+        matched = products.find(
+          (p) => p.name.trim().toLowerCase() === q.toLowerCase()
+        );
+      }
+
+      // 3. If still not matched, check if filteredProducts has exactly 1 match
+      if (!matched && filteredProducts.length === 1) {
+        matched = filteredProducts[0];
+      }
+
+      if (matched) {
+        setMinimized(false);
+        const added = handleAddToCart(matched);
+        if (added) {
+          toast.success(
+            'Added to Current Sale',
+            `"${matched.name}" (${formatPHP(matched.selling_price)}) added.`
+          );
+          setSearchQuery('');
+        }
+      } else {
+        toast.warning(
+          'Product Not Found',
+          `No product found for "${q}". Check barcode or add product in Inventory.`
+        );
+      }
+    },
+    [products, filteredProducts, handleAddToCart, toast]
+  );
+
+  // Barcode scanned handler from camera
   const handleBarcodeScanned = useCallback(
     (barcode: string) => {
       setScannerVisible(false);
-      const matched = products.find(
-        (p) => p.barcode && p.barcode.trim().toLowerCase() === barcode.trim().toLowerCase()
-      );
-      if (matched) {
-        handleAddToCart(matched);
-        toast.success('Product Scanned', `Added ${matched.name} to cart.`);
-      } else {
-        toast.warning('Not Found', `No product found with barcode: ${barcode}`);
-      }
+      handleScanOrEnterProduct(barcode);
     },
-    [products, handleAddToCart, toast]
+    [handleScanOrEnterProduct]
   );
 
-  // Complete checkout & record sale
-  const handleCheckout = async () => {
+  const handleSearchChange = (text: string) => {
+    // When handheld barcode scanner sends a newline or user pastes code with newline
+    if (text.includes('\n') || text.includes('\r')) {
+      const clean = text.replace(/[\r\n]+/g, '').trim();
+      setSearchQuery('');
+      if (clean) {
+        handleScanOrEnterProduct(clean);
+      }
+      return;
+    }
+    setSearchQuery(text);
+  };
+
+  // Initiate checkout: validate and open confirmation modal with all items
+  const handleInitiateCheckout = () => {
     if (cart.length === 0) {
       toast.warning('Cart is Empty', 'Please select at least one product to sell.');
       return;
@@ -271,6 +321,11 @@ export default function PosSaleScreen() {
       return;
     }
 
+    setConfirmModalVisible(true);
+  };
+
+  // Confirmed checkout: record sale & deduct inventory
+  const handleConfirmSale = async () => {
     try {
       setSubmitting(true);
       const saleResult = await SaleRepository.createSale({
@@ -283,6 +338,7 @@ export default function PosSaleScreen() {
         notes: 'Direct store cash sale',
       });
 
+      setConfirmModalVisible(false);
       setCompletedSale(saleResult);
       handleClearCart();
       // Reload products so stock is updated in real-time
@@ -322,20 +378,44 @@ export default function PosSaleScreen() {
         <View style={styles.container}>
           {/* Top Search & Category Bar */}
           <View style={styles.topBar}>
-            <View style={styles.searchBox}>
-              <FontAwesome name="search" size={14} color="#64748b" style={{ marginRight: 8 }} />
-              <TextInput
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder="Search Kopiko, Coke, Sardines..."
-                placeholderTextColor="#94a3b8"
-                style={styles.searchInput}
-              />
-              {searchQuery.length > 0 && (
-                <Pressable onPress={() => setSearchQuery('')} hitSlop={8}>
-                  <FontAwesome5 name="times-circle" size={14} color="#94a3b8" />
-                </Pressable>
-              )}
+            <View style={styles.searchRow}>
+              <View style={styles.searchBox}>
+                <FontAwesome name="barcode" size={15} color="#059669" style={{ marginRight: 8 }} />
+                <TextInput
+                  value={searchQuery}
+                  onChangeText={handleSearchChange}
+                  onSubmitEditing={() => handleScanOrEnterProduct(searchQuery)}
+                  placeholder="Scan barcode or type & Enter to add..."
+                  placeholderTextColor="#94a3b8"
+                  style={styles.searchInput}
+                  returnKeyType="done"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {searchQuery.length > 0 && (
+                  <Pressable onPress={() => setSearchQuery('')} hitSlop={8} style={{ marginRight: 6 }}>
+                    <FontAwesome5 name="times-circle" size={14} color="#94a3b8" />
+                  </Pressable>
+                )}
+                {searchQuery.trim().length > 0 && (
+                  <Pressable
+                    onPress={() => handleScanOrEnterProduct(searchQuery)}
+                    style={styles.enterBtn}
+                    hitSlop={6}
+                  >
+                    <FontAwesome5 name="arrow-right" size={10} color="#ffffff" style={{ marginRight: 4 }} />
+                    <Text style={styles.enterBtnText}>Enter</Text>
+                  </Pressable>
+                )}
+              </View>
+
+              <Pressable
+                onPress={() => setScannerVisible(true)}
+                style={styles.scanBarcodeBtn}
+              >
+                <FontAwesome5 name="camera" size={13} color="#ffffff" style={{ marginRight: 6 }} />
+                <Text style={styles.scanBarcodeBtnText}>Scan</Text>
+              </Pressable>
             </View>
 
             {/* Category pills */}
@@ -660,7 +740,7 @@ export default function PosSaleScreen() {
                         ? 'Processing Sale...'
                         : `Complete Sale (${formatPHP(totalAmountCentavos)})`
                     }
-                    onPress={handleCheckout}
+                    onPress={handleInitiateCheckout}
                     variant="primary"
                     loading={submitting}
                     disabled={cart.length === 0 || tenderedCentavos < totalAmountCentavos}
@@ -680,6 +760,122 @@ export default function PosSaleScreen() {
           onScan={handleBarcodeScanned}
           title="Scan Product to Add"
         />
+
+        {/* Sale Confirmation Modal */}
+        <Modal
+          visible={confirmModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (!submitting) setConfirmModalVisible(false);
+          }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.confirmModalCard}>
+              {/* Modal Header */}
+              <View style={styles.confirmHeader}>
+                <View style={styles.confirmHeaderLeft}>
+                  <View style={styles.confirmIconCircle}>
+                    <FontAwesome5 name="shopping-bag" size={16} color="#059669" />
+                  </View>
+                  <View>
+                    <Text style={styles.confirmTitle}>Confirm Sale</Text>
+                    <Text style={styles.confirmSubtitle}>Review items before completing</Text>
+                  </View>
+                </View>
+                <Pressable
+                  onPress={() => setConfirmModalVisible(false)}
+                  disabled={submitting}
+                  hitSlop={8}
+                  style={styles.confirmCloseBtn}
+                >
+                  <FontAwesome name="times" size={16} color="#94a3b8" />
+                </Pressable>
+              </View>
+
+              {/* Items List Section */}
+              <View style={styles.confirmItemsHeaderRow}>
+                <Text style={styles.confirmSectionTitle}>
+                  Items to Purchase ({totalItemsCount})
+                </Text>
+                <Text style={styles.confirmSectionSubtotal}>Subtotal</Text>
+              </View>
+
+              <ScrollView
+                style={styles.confirmItemsScroll}
+                contentContainerStyle={{ paddingVertical: 4 }}
+                showsVerticalScrollIndicator={true}
+              >
+                {cart.map((item, idx) => (
+                  <View
+                    key={item.product.id}
+                    style={[
+                      styles.confirmItemRow,
+                      idx > 0 && styles.confirmItemBorderTop,
+                    ]}
+                  >
+                    <View style={{ flex: 1, paddingRight: 8 }}>
+                      <Text style={styles.confirmItemName} numberOfLines={1}>
+                        {item.product.name}
+                      </Text>
+                      <Text style={styles.confirmItemUnit}>
+                        {formatPHP(item.product.selling_price)} × {item.quantity} {item.product.unit}
+                      </Text>
+                    </View>
+                    <Text style={styles.confirmItemTotal}>
+                      {formatPHP(item.quantity * item.product.selling_price)}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+
+              {/* Payment Summary Box */}
+              <View style={styles.confirmSummaryBox}>
+                <View style={styles.confirmSummaryRow}>
+                  <Text style={styles.confirmSummaryLabel}>Total Amount Due:</Text>
+                  <Text style={styles.confirmSummaryAmount}>
+                    {formatPHP(totalAmountCentavos)}
+                  </Text>
+                </View>
+                <View style={styles.confirmSummaryRow}>
+                  <Text style={styles.confirmSummaryLabel}>Cash Tendered:</Text>
+                  <Text style={styles.confirmSummaryValue}>
+                    {formatPHP(tenderedCentavos)}
+                  </Text>
+                </View>
+                <View style={[styles.confirmSummaryRow, styles.confirmSummaryBorderTop]}>
+                  <Text style={[styles.confirmSummaryLabel, { fontWeight: '700', color: '#059669' }]}>
+                    Change (Sukli):
+                  </Text>
+                  <Text style={[styles.confirmSummaryValue, { fontWeight: '800', color: '#059669', fontSize: 16 }]}>
+                    {formatPHP(changeCentavos)}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Action Buttons */}
+              <View style={styles.confirmActionsRow}>
+                <AppButton
+                  title="Edit Order"
+                  onPress={() => setConfirmModalVisible(false)}
+                  variant="secondary"
+                  size="md"
+                  disabled={submitting}
+                  style={{ flex: 1 }}
+                />
+                <AppButton
+                  title={submitting ? 'Confirming...' : 'Confirm & Complete'}
+                  onPress={handleConfirmSale}
+                  variant="primary"
+                  size="md"
+                  loading={submitting}
+                  icon={<FontAwesome5 name="check-circle" size={13} color="#ffffff" style={{ marginRight: 6 }} />}
+                  style={{ flex: 1.5 }}
+                />
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         {/* Sale Success Modal */}
         {completedSale && (
@@ -769,18 +965,51 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 6,
   },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   searchBox: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#f1f5f9',
     borderRadius: 8,
     paddingHorizontal: 10,
-    height: 38,
+    height: 40,
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 13,
     color: '#0f172a',
+    paddingVertical: 0,
+  },
+  enterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#059669',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  enterBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  scanBarcodeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#059669',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 40,
+  },
+  scanBarcodeBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   categoryScroll: {
     paddingVertical: 6,
@@ -1272,5 +1501,139 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  confirmModalCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 18,
+    width: '100%',
+    maxWidth: 400,
+    maxHeight: '88%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  confirmHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  confirmHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  confirmIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#ecfdf5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  confirmTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  confirmSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  confirmCloseBtn: {
+    padding: 6,
+  },
+  confirmItemsHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  confirmSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  confirmSectionSubtotal: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  confirmItemsScroll: {
+    maxHeight: 200,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 10,
+    marginBottom: 12,
+  },
+  confirmItemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  confirmItemBorderTop: {
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  confirmItemName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 2,
+  },
+  confirmItemUnit: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  confirmItemTotal: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  confirmSummaryBox: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    padding: 12,
+    gap: 6,
+    marginBottom: 14,
+  },
+  confirmSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  confirmSummaryBorderTop: {
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 8,
+    marginTop: 2,
+  },
+  confirmSummaryLabel: {
+    fontSize: 12,
+    color: '#475569',
+  },
+  confirmSummaryAmount: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  confirmSummaryValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  confirmActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
   },
 });

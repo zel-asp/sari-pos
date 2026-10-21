@@ -34,7 +34,6 @@ export default function DashboardScreen() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [realtimePulse, setRealtimePulse] = useState(false);
 
   const fetchStoreName = async (): Promise<string> => {
     try {
@@ -100,8 +99,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "sales" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -109,8 +106,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "sale_items" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -118,8 +113,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "products" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -127,8 +120,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "stock_movements" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -136,8 +127,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "customers" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -145,8 +134,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "credit_transactions" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -154,8 +141,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "credit_transaction_items" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -163,8 +148,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "customer_payments" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -172,8 +155,6 @@ export default function DashboardScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "expenses" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           fetchDashboardDataRef.current(false);
         }
       )
@@ -234,13 +215,6 @@ export default function DashboardScreen() {
                 <Text style={styles.badgeText}>Sari-Sari Store POS</Text>
               </View>
               <Text style={styles.storeName}>{storeName}</Text>
-            </View>
-
-            <View style={[styles.realtimePill, realtimePulse && styles.realtimePillPulsing]}>
-              <View style={[styles.realtimeDot, realtimePulse && styles.realtimeDotPulsing]} />
-              <Text style={[styles.realtimeText, realtimePulse && styles.realtimeTextPulsing]}>
-                {realtimePulse ? "Updated live" : "Realtime"}
-              </Text>
             </View>
           </View>
 
@@ -998,40 +972,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: "#0f172a",
     letterSpacing: -0.4,
-  },
-  realtimePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f0fdf4",
-    borderWidth: 1,
-    borderColor: "#bbf7d0",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 14,
-  },
-  realtimePillPulsing: {
-    backgroundColor: "#dcfce7",
-    borderColor: "#4ade80",
-  },
-  realtimeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#10b981",
-    marginRight: 5,
-  },
-  realtimeDotPulsing: {
-    backgroundColor: "#059669",
-  },
-  realtimeText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#059669",
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
-  },
-  realtimeTextPulsing: {
-    color: "#047857",
   },
   dbStatusPill: {
     flexDirection: "row",

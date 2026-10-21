@@ -28,7 +28,6 @@ export default function UtangListScreen() {
   const [filterTab, setFilterTab] = useState<'all' | 'balance' | 'paid'>('all');
   const [page, setPage] = useState(1);
   const [reloadKey, setReloadKey] = useState(0);
-  const [realtimePulse, setRealtimePulse] = useState(false);
 
   const loadCustomers = useCallback(
     async (showLoading = true) => {
@@ -71,8 +70,6 @@ export default function UtangListScreen() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'customers' },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadCustomersRef.current(false);
         }
       )
@@ -80,8 +77,6 @@ export default function UtangListScreen() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'credit_transactions' },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadCustomersRef.current(false);
         }
       )
@@ -89,8 +84,6 @@ export default function UtangListScreen() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'customer_payments' },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadCustomersRef.current(false);
         }
       )
@@ -203,12 +196,6 @@ export default function UtangListScreen() {
               <View>
                 <View style={styles.liveBadgeRow}>
                   <Text style={styles.summarySubtitle}>Total Outstanding Utang</Text>
-                  <View style={[styles.realtimePill, realtimePulse && styles.realtimePillPulsing]}>
-                    <View style={[styles.realtimeDot, realtimePulse && styles.realtimeDotPulsing]} />
-                    <Text style={[styles.realtimeText, realtimePulse && styles.realtimeTextPulsing]}>
-                      {realtimePulse ? 'Updated live' : 'Realtime'}
-                    </Text>
-                  </View>
                 </View>
                 <Text style={styles.summaryBigAmount}>{formatPHP(totalOutstanding)}</Text>
               </View>
@@ -467,40 +454,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 4,
-  },
-  realtimePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  realtimePillPulsing: {
-    backgroundColor: '#dcfce7',
-    borderColor: '#4ade80',
-  },
-  realtimeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10b981',
-    marginRight: 4,
-  },
-  realtimeDotPulsing: {
-    backgroundColor: '#059669',
-  },
-  realtimeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  realtimeTextPulsing: {
-    color: '#047857',
   },
   summarySubtitle: {
     fontSize: 12,

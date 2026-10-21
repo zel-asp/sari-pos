@@ -36,7 +36,6 @@ export default function OverviewScreen() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [velocityTab, setVelocityTab] = useState<"fast" | "slow">("fast");
   const [velocityPage, setVelocityPage] = useState(1);
-  const [realtimePulse, setRealtimePulse] = useState(false);
 
   const filter: AnalyticsFilter = useMemo(
     () => ({
@@ -93,8 +92,6 @@ export default function OverviewScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "sales" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadDataRef.current();
         },
       )
@@ -102,8 +99,6 @@ export default function OverviewScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "stock_movements" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadDataRef.current();
         },
       )
@@ -111,8 +106,6 @@ export default function OverviewScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "customer_payments" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadDataRef.current();
         },
       )
@@ -127,8 +120,6 @@ export default function OverviewScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "credit_transactions" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadDataRef.current();
         },
       )
@@ -136,8 +127,6 @@ export default function OverviewScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "credit_transaction_items" },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadDataRef.current();
         },
       )

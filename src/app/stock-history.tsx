@@ -32,7 +32,6 @@ export default function StockHistoryScreen() {
   const [selectedType, setSelectedType] = useState<'all' | MovementType>('all');
   const [timeFilter, setTimeFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [page, setPage] = useState(1);
-  const [realtimePulse, setRealtimePulse] = useState(false);
 
   // Fetch stock movements
   const loadMovements = useCallback(
@@ -74,8 +73,6 @@ export default function StockHistoryScreen() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'stock_movements' },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           loadMovementsRef.current(false);
         }
       )
@@ -223,12 +220,6 @@ export default function StockHistoryScreen() {
                 <View>
                   <View style={styles.liveBadgeRow}>
                     <Text style={styles.bannerSubtitle}>Stock Movements</Text>
-                    <View style={[styles.realtimePill, realtimePulse && styles.realtimePillPulsing]}>
-                      <View style={[styles.realtimeDot, realtimePulse && styles.realtimeDotPulsing]} />
-                      <Text style={[styles.realtimeText, realtimePulse && styles.realtimeTextPulsing]}>
-                        {realtimePulse ? 'Updated live' : 'Realtime'}
-                      </Text>
-                    </View>
                   </View>
                   <Text style={styles.bannerTitle}>In & Out History</Text>
                 </View>
@@ -594,40 +585,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-  },
-  realtimePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  realtimePillPulsing: {
-    backgroundColor: '#dcfce7',
-    borderColor: '#4ade80',
-  },
-  realtimeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10b981',
-    marginRight: 4,
-  },
-  realtimeDotPulsing: {
-    backgroundColor: '#059669',
-  },
-  realtimeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  realtimeTextPulsing: {
-    color: '#047857',
   },
   bannerTitle: {
     fontSize: 22,

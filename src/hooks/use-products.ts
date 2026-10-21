@@ -16,7 +16,6 @@ export function useProducts(initialFilter: ProductFilter = {}) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProductFilter>(initialFilter);
   const [reloadKey, setReloadKey] = useState(0);
-  const [realtimePulse, setRealtimePulse] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -55,8 +54,6 @@ export function useProducts(initialFilter: ProductFilter = {}) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'products' },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           setReloadKey((k) => k + 1);
         }
       )
@@ -64,8 +61,6 @@ export function useProducts(initialFilter: ProductFilter = {}) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'stock_movements' },
         () => {
-          setRealtimePulse(true);
-          setTimeout(() => setRealtimePulse(false), 2000);
           setReloadKey((k) => k + 1);
         }
       )
@@ -116,7 +111,6 @@ export function useProducts(initialFilter: ProductFilter = {}) {
     updateProduct,
     adjustStock,
     archiveProduct,
-    realtimePulse,
   };
 }
 
