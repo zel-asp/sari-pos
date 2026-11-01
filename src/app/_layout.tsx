@@ -35,11 +35,11 @@ export default function RootLayout() {
             }}
           >
             <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="pos" options={{ title: 'Sell (Export) POS' }} />
-            <Stack.Screen name="inventory" options={{ title: 'Inventory' }} />
+            <Stack.Screen name="pos" options={{ headerShown: false }} />
+            <Stack.Screen name="inventory" options={{ headerShown: false }} />
             <Stack.Screen name="products/new" options={{ title: 'Add Product' }} />
             <Stack.Screen name="products/[id]" options={{ title: 'Product Details' }} />
-            <Stack.Screen name="utang/index" options={{ title: 'Utang' }} />
+            <Stack.Screen name="utang/index" options={{ headerShown: false }} />
             <Stack.Screen name="utang/new" options={{ title: 'New Utang Transaction' }} />
             <Stack.Screen name="utang/[id]" options={{ title: 'Customer Profile' }} />
           </Stack>

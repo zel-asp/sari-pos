@@ -501,7 +501,9 @@ export default function PosSaleScreen() {
                         ]}
                       >
                         <View style={styles.productInfoCol}>
-                          <Text style={styles.productName}>{item.name}</Text>
+                          <Text style={styles.productName} numberOfLines={2} ellipsizeMode="tail">
+                            {item.name}
+                          </Text>
                           <View style={styles.productMetaRow}>
                             <Text style={styles.productPrice}>
                               {formatPHP(item.selling_price)}
@@ -1013,16 +1015,16 @@ const styles = StyleSheet.create({
   },
   categoryScroll: {
     paddingVertical: 6,
-    gap: 6,
+    paddingHorizontal: 2,
   },
   catPill: {
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 16,
     backgroundColor: '#f1f5f9',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginRight: 6,
+    marginRight: 8,
   },
   catPillActive: {
     backgroundColor: '#059669',
@@ -1064,24 +1066,25 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   productList: {
-    paddingBottom: 8,
-    gap: 6,
+    paddingBottom: 20,
   },
   productCard: {
     flexDirection: 'row',
+    flexWrap: 'nowrap',
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    padding: 10,
-    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginBottom: 6,
+    marginBottom: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
   productCardDisabled: {
     opacity: 0.5,
@@ -1093,32 +1096,38 @@ const styles = StyleSheet.create({
   },
   productInfoCol: {
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: 12,
+    justifyContent: 'center',
   },
   productName: {
     fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 2,
+    marginBottom: 4,
+    lineHeight: 18,
   },
   productMetaRow: {
     flexDirection: 'row',
+    flexWrap: 'nowrap',
     alignItems: 'center',
-    gap: 4,
   },
   productPrice: {
     fontSize: 13,
     fontWeight: '800',
     color: '#059669',
+    marginRight: 2,
   },
   productUnit: {
     fontSize: 11,
     color: '#64748b',
+    marginRight: 6,
   },
   stockBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    marginLeft: 6,
   },
   stockBadgeNormal: {
     backgroundColor: '#f0fdf4',
@@ -1136,9 +1145,11 @@ const styles = StyleSheet.create({
   },
   inCartIndicator: {
     backgroundColor: '#059669',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 12,
+    flexShrink: 0,
+    marginLeft: 6,
   },
   inCartIndicatorText: {
     fontSize: 11,
@@ -1146,12 +1157,16 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   addBtnCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#ecfdf5',
     justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 0,
+    marginLeft: 6,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
   },
   addBtnCircleDisabled: {
     backgroundColor: '#f1f5f9',

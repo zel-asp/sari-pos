@@ -257,31 +257,31 @@ export function AppLayout({
                     pressed && { opacity: 0.8 },
                   ]}
                 >
-                  <View
-                    style={[
-                      styles.drawerItemIconBox,
-                      isActive && styles.drawerItemIconBoxActive,
-                    ]}
-                  >
-                    <FontAwesome5
-                      name={item.icon}
-                      size={16}
-                      color={isActive ? "#059669" : "#64748b"}
-                    />
-                  </View>
-                  <Text
-                    style={[
-                      styles.drawerItemLabel,
-                      isActive && styles.drawerItemLabelActive,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                  {isActive && (
-                    <View style={styles.drawerActiveBadge}>
-                      <Text style={styles.drawerActiveBadgeText}>Active</Text>
+                  <View style={styles.drawerItemLeft}>
+                    <View
+                      style={[
+                        styles.drawerItemIconBox,
+                        isActive && styles.drawerItemIconBoxActive,
+                      ]}
+                    >
+                      <FontAwesome5
+                        name={item.icon}
+                        size={16}
+                        color={isActive ? "#059669" : "#64748b"}
+                      />
                     </View>
-                  )}
+                    <Text
+                      style={[
+                        styles.drawerItemLabel,
+                        isActive && styles.drawerItemLabelActive,
+                      ]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {item.label}
+                    </Text>
+                  </View>
+                  {isActive && <View style={styles.activePillIndicator} />}
                 </Pressable>
               );
             })}
@@ -426,6 +426,7 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 2,
     backgroundColor: "#059669",
+    flexShrink: 0,
   },
   sidebarFooter: {
     borderTopWidth: 1,
@@ -586,13 +587,14 @@ const styles = StyleSheet.create({
   },
   drawerHeaderSafe: {
     backgroundColor: "#ffffff",
+    paddingTop: Platform.OS === "android" ? 12 : 0,
   },
   drawerHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
   },
@@ -601,13 +603,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   drawerBrandIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "#059669",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
+    marginRight: 12,
   },
   drawerBrandTitle: {
     fontSize: 16,
@@ -620,8 +622,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   drawerCloseBtn: {
-    width: 32,
-    height: 32,
+    width: 34,
+    height: 34,
     borderRadius: 8,
     backgroundColor: "#f8fafc",
     alignItems: "center",
@@ -629,36 +631,50 @@ const styles = StyleSheet.create({
   },
   drawerLinksScroll: {
     flex: 1,
-    paddingHorizontal: 14,
-    paddingTop: 16,
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 24,
   },
   drawerSectionTitle: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     color: "#94a3b8",
     letterSpacing: 0.8,
-    marginBottom: 8,
+    marginBottom: 12,
     marginLeft: 8,
   },
   drawerItem: {
     flexDirection: "row",
+    flexWrap: "nowrap",
     alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 4,
+    justifyContent: "space-between",
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    marginBottom: 8,
   },
   drawerItemActive: {
     backgroundColor: "#ecfdf5",
   },
+  drawerItemLeft: {
+    flexDirection: "row",
+    flexWrap: "nowrap",
+    alignItems: "center",
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: 12,
+    overflow: "hidden",
+  },
   drawerItemIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "#f1f5f9",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
+    marginRight: 14,
+    flexShrink: 0,
   },
   drawerItemIconBoxActive: {
     backgroundColor: "#d1fae5",
@@ -668,21 +684,11 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#334155",
     flex: 1,
+    flexShrink: 1,
   },
   drawerItemLabelActive: {
     color: "#059669",
     fontWeight: "800",
-  },
-  drawerActiveBadge: {
-    backgroundColor: "#d1fae5",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  drawerActiveBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#047857",
   },
   drawerFooter: {
     paddingHorizontal: 18,

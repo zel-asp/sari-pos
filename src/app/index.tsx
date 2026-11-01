@@ -193,7 +193,7 @@ export default function DashboardScreen() {
     <View style={styles.skeletonContainer}>
       <Skeleton width={130} height={18} borderRadius={4} style={{ marginBottom: 12 }} />
       <View style={styles.actionsGrid}>
-        {[1, 2, 3, 4, 5, 6].map((i) => (
+        {[1, 2, 3, 4].map((i) => (
           <View key={i} style={styles.actionCardSkeleton}>
             <Skeleton width={36} height={36} borderRadius={10} style={{ marginBottom: 8 }} />
             <Skeleton width="75%" height={15} borderRadius={4} style={{ marginBottom: 6 }} />
@@ -374,44 +374,6 @@ export default function DashboardScreen() {
                   </View>
                   <Text style={styles.actionCardTitleBlue}>Add Product</Text>
                   <Text style={styles.actionCardSubtitleBlue}>New Item</Text>
-                </Pressable>
-
-                {/* Record Utang Card */}
-                <Pressable
-                  onPress={() => router.push("/utang/new")}
-                  style={({ pressed }) => [
-                    styles.actionCardBase,
-                    styles.actionCardPurple,
-                    pressed && styles.cardPressed,
-                  ]}
-                >
-                  <View style={styles.actionIconBoxPurple}>
-                    <FontAwesome5
-                      name="hand-holding-usd"
-                      size={16}
-                      color="#7c3aed"
-                    />
-                  </View>
-                  <Text style={styles.actionCardTitlePurple}>New Utang</Text>
-                  <Text style={styles.actionCardSubtitlePurple}>Record Credit</Text>
-                </Pressable>
-
-                {/* Overview & Charts Card */}
-                <Pressable
-                  onPress={() => router.push("/overview")}
-                  style={({ pressed }) => [
-                    styles.actionCardBase,
-                    styles.actionCardIndigo,
-                    pressed && styles.cardPressed,
-                  ]}
-                >
-                  <View style={styles.actionIconBoxIndigo}>
-                    <FontAwesome5 name="chart-line" size={16} color="#4f46e5" />
-                  </View>
-                  <Text style={styles.actionCardTitleIndigo}>Overview & Charts</Text>
-                  <Text style={styles.actionCardSubtitleIndigo}>
-                    Capital, Loss & Profit
-                  </Text>
                 </Pressable>
               </View>
 
