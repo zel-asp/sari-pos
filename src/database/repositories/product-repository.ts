@@ -123,15 +123,70 @@ export const ProductRepository = {
   },
 
   /**
+   * Checks if a product name is already used by another active product (case-insensitive).
+   */
+  async isNameDuplicate(
+    arg1: any,
+    arg2?: string | number,
+    arg3?: number
+  ): Promise<boolean> {
+    let name: string;
+    let excludeProductId: number | undefined;
+
+    if (typeof arg1 === 'string') {
+      name = arg1.trim();
+      excludeProductId = typeof arg2 === 'number' ? arg2 : undefined;
+    } else {
+      name = (typeof arg2 === 'string' ? arg2 : '').trim();
+      excludeProductId = typeof arg3 === 'number' ? arg3 : undefined;
+    }
+
+    if (!name) return false;
+
+    let query = supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .ilike('name', name)
+      .eq('is_active', 1);
+
+    if (excludeProductId) {
+      query = query.neq('id', excludeProductId);
+    }
+
+    const { count, error } = await query;
+    if (error) {
+      console.error('[Supabase] Error in isNameDuplicate:', error);
+      throw error;
+    }
+    return (count ?? 0) > 0;
+  },
+
+  /**
    * Creates a new product and logs an initial stock movement if initial stock > 0.
    */
   async create(arg1: any, arg2?: CreateProductInput): Promise<Product> {
     const input: CreateProductInput = arg2 ? arg2 : arg1;
     const now = new Date().toISOString();
+    const trimmedName = input.name.trim();
+    const trimmedBarcode = input.barcode ? input.barcode.trim() : null;
+
+    // Check for duplicate name
+    const hasDuplicateName = await ProductRepository.isNameDuplicate(trimmedName);
+    if (hasDuplicateName) {
+      throw new Error(`A product with the name "${trimmedName}" already exists.`);
+    }
+
+    // Check for duplicate barcode if barcode is provided
+    if (trimmedBarcode) {
+      const hasDuplicateBarcode = await ProductRepository.isBarcodeDuplicate(trimmedBarcode);
+      if (hasDuplicateBarcode) {
+        throw new Error(`A product with barcode "${trimmedBarcode}" already exists.`);
+      }
+    }
 
     const insertData = {
-      barcode: input.barcode?.trim() || null,
-      name: input.name.trim(),
+      barcode: trimmedBarcode,
+      name: trimmedName,
       category: input.category?.trim() || 'General',
       cost_price: Math.round(input.cost_price),
       selling_price: Math.round(input.selling_price),
@@ -189,8 +244,24 @@ export const ProductRepository = {
       updated_at: new Date().toISOString(),
     };
 
-    if (input.name !== undefined) updateFields.name = input.name.trim();
-    if (input.barcode !== undefined) updateFields.barcode = input.barcode ? input.barcode.trim() : null;
+    if (input.name !== undefined) {
+      const trimmedName = input.name.trim();
+      const isDupName = await ProductRepository.isNameDuplicate(trimmedName, id);
+      if (isDupName) {
+        throw new Error(`A product with the name "${trimmedName}" already exists.`);
+      }
+      updateFields.name = trimmedName;
+    }
+    if (input.barcode !== undefined) {
+      const trimmedBarcode = input.barcode ? input.barcode.trim() : null;
+      if (trimmedBarcode) {
+        const isDupBarcode = await ProductRepository.isBarcodeDuplicate(trimmedBarcode, id);
+        if (isDupBarcode) {
+          throw new Error(`A product with barcode "${trimmedBarcode}" already exists.`);
+        }
+      }
+      updateFields.barcode = trimmedBarcode;
+    }
     if (input.category !== undefined) updateFields.category = input.category.trim();
     if (input.cost_price !== undefined) updateFields.cost_price = Math.round(input.cost_price);
     if (input.selling_price !== undefined) updateFields.selling_price = Math.round(input.selling_price);

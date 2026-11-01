@@ -10,6 +10,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   Modal,
+  Image,
+  Alert,
 } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { FontAwesome5, FontAwesome, Ionicons } from '@expo/vector-icons';
@@ -23,9 +25,17 @@ import { pesosToCentavos } from '@/utils/currency';
 import { type UnitOfMeasurement } from '@/types/database';
 import {
   parseReceiptWithGemini,
+  parseReceiptsWithGemini,
   type ReceiptScanResult,
   type ScannedReceiptItem,
 } from '@/lib/gemini';
+
+export interface QueuedImage {
+  id: string;
+  uri: string;
+  base64?: string | null;
+  mimeType?: string;
+}
 
 const COMMON_UNITS: UnitOfMeasurement[] = [
   'piece',
@@ -68,16 +78,55 @@ export default function NewProductScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
 
+  // Duplicate prevention states
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [barcodeError, setBarcodeError] = useState<string | null>(null);
+
   // Receipt Scanner states
   const [isScanningReceipt, setIsScanningReceipt] = useState(false);
   const [receiptScanResult, setReceiptScanResult] = useState<ReceiptScanResult | null>(null);
   const [showReceiptReview, setShowReceiptReview] = useState(false);
+  const [imageQueue, setImageQueue] = useState<QueuedImage[]>([]);
+  const [activeScannedItemId, setActiveScannedItemId] = useState<string | null>(null);
 
-  const getBase64FromAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
-    if (asset.base64) {
-      return asset.base64;
+  const checkNameDuplicate = async (val: string) => {
+    const trimmed = val.trim();
+    if (!trimmed) {
+      setNameError(null);
+      return;
     }
-    const response = await fetch(asset.uri);
+    try {
+      const isDup = await ProductRepository.isNameDuplicate(trimmed);
+      if (isDup) {
+        setNameError(`"${trimmed}" is already in your database. Avoid creating duplicates.`);
+      } else {
+        setNameError(null);
+      }
+    } catch {
+      // ignore check error
+    }
+  };
+
+  const checkBarcodeDuplicate = async (val: string) => {
+    const trimmed = val.trim();
+    if (!trimmed) {
+      setBarcodeError(null);
+      return;
+    }
+    try {
+      const isDup = await ProductRepository.isBarcodeDuplicate(trimmed);
+      if (isDup) {
+        setBarcodeError(`Barcode "${trimmed}" already belongs to an existing product.`);
+      } else {
+        setBarcodeError(null);
+      }
+    } catch {
+      // ignore check error
+    }
+  };
+
+  const getBase64FromUri = async (uri: string): Promise<string> => {
+    const response = await fetch(uri);
     const blob = await response.blob();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -89,47 +138,6 @@ export default function NewProductScreen() {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
-  };
-
-  const processReceiptImage = async (asset: ImagePicker.ImagePickerAsset) => {
-    try {
-      setIsScanningReceipt(true);
-      const base64 = await getBase64FromAsset(asset);
-      const mime = asset.mimeType || 'image/jpeg';
-      const result = await parseReceiptWithGemini(base64, mime);
-
-      if (!result.items || result.items.length === 0) {
-        toast.warning(
-          'No Items Found',
-          'Could not detect purchased items in this image. Please ensure the receipt is well-lit and readable.'
-        );
-        return;
-      }
-
-      if (result.items.length === 1) {
-        handleApplySingleItem(result.items[0]);
-        toast.success(
-          'Product Details Auto-Filled!',
-          `Loaded "${result.items[0].name}" (Cost: ₱${result.items[0].costPrice.toFixed(2)}, SRP: ₱${result.items[0].sellingPrice.toFixed(2)}).`
-        );
-        return;
-      }
-
-      setReceiptScanResult(result);
-      setShowReceiptReview(true);
-      toast.success(
-        'Receipt Processed!',
-        `Found ${result.items.length} items from ${result.storeName || 'receipt'}.`
-      );
-    } catch (err) {
-      console.error('[Receipt Scanner Error]', err);
-      toast.error(
-        'Scan Failed',
-        err instanceof Error ? err.message : 'Failed to parse receipt with AI.'
-      );
-    } finally {
-      setIsScanningReceipt(false);
-    }
   };
 
   const handleTakeReceiptPhoto = async () => {
@@ -147,9 +155,23 @@ export default function NewProductScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        await processReceiptImage(result.assets[0]);
+        const asset = result.assets[0];
+        const newImage: QueuedImage = {
+          id: `photo-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          uri: asset.uri,
+          base64: asset.base64,
+          mimeType: asset.mimeType || 'image/jpeg',
+        };
+        setImageQueue((prev) => {
+          const updated = [...prev, newImage];
+          toast.success(
+            'Photo Added to Queue',
+            `Photo #${updated.length} queued. Snap more or tap "Extract All".`
+          );
+          return updated;
+        });
       }
-    } catch (err) {
+    } catch {
       toast.error('Camera Error', 'Could not open camera.');
     }
   };
@@ -158,20 +180,103 @@ export default function NewProductScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: false,
+        allowsMultipleSelection: true,
         quality: 0.85,
         base64: true,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        await processReceiptImage(result.assets[0]);
+        const newImages: QueuedImage[] = result.assets.map((asset, idx) => ({
+          id: `upload-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+          uri: asset.uri,
+          base64: asset.base64,
+          mimeType: asset.mimeType || 'image/jpeg',
+        }));
+        setImageQueue((prev) => {
+          const updated = [...prev, ...newImages];
+          toast.success(
+            'Photos Queued',
+            `Added ${newImages.length} photo${newImages.length > 1 ? 's' : ''} (${updated.length} total in queue).`
+          );
+          return updated;
+        });
       }
-    } catch (err) {
+    } catch {
       toast.error('File Error', 'Could not select image file.');
     }
   };
 
+  const handleRemoveQueuedImage = (id: string) => {
+    setImageQueue((prev) => prev.filter((img) => img.id !== id));
+  };
+
+  const handleClearQueue = () => {
+    setImageQueue([]);
+  };
+
+  const handleProcessQueue = async () => {
+    if (imageQueue.length === 0) {
+      toast.warning('Queue is Empty', 'Please take or insert at least one receipt photo first.');
+      return;
+    }
+
+    try {
+      setIsScanningReceipt(true);
+      const preparedImages = await Promise.all(
+        imageQueue.map(async (img) => {
+          let b64 = img.base64;
+          if (!b64) {
+            b64 = await getBase64FromUri(img.uri);
+          }
+          return {
+            base64: b64,
+            mimeType: img.mimeType || 'image/jpeg',
+          };
+        })
+      );
+
+      const result = await parseReceiptsWithGemini(preparedImages);
+
+      if (!result.items || result.items.length === 0) {
+        toast.warning(
+          'No Items Found',
+          'Could not detect purchased items in the uploaded photos. Please ensure the receipts are well-lit and legible.'
+        );
+        return;
+      }
+
+      // Clear image queue now that extraction is complete
+      setImageQueue([]);
+
+      if (result.items.length === 1) {
+        handleApplySingleItem(result.items[0]);
+        setReceiptScanResult(result);
+        toast.success(
+          'Product Details Auto-Filled!',
+          `Loaded "${result.items[0].name}" (Cost: ₱${result.items[0].costPrice.toFixed(2)}, SRP: ₱${result.items[0].sellingPrice.toFixed(2)}).`
+        );
+        return;
+      }
+
+      setReceiptScanResult(result);
+      setShowReceiptReview(true);
+      toast.success(
+        'Receipts Processed!',
+        `Extracted ${result.items.length} items from ${result.storeName || 'receipt'}.`
+      );
+    } catch (err) {
+      console.error('[Receipt Scanner Error]', err);
+      toast.error(
+        'Scan Failed',
+        err instanceof Error ? err.message : 'Failed to parse receipts with AI.'
+      );
+    } finally {
+      setIsScanningReceipt(false);
+    }
+  };
+
   const handleApplySingleItem = (item: ScannedReceiptItem) => {
+    setActiveScannedItemId(item.id);
     setName(item.name);
     setCostPriceStr(item.costPrice ? item.costPrice.toFixed(2) : '');
     setSellingPriceStr(item.sellingPrice ? item.sellingPrice.toFixed(2) : '');
@@ -185,6 +290,7 @@ export default function NewProductScreen() {
     if (COMMON_UNITS.includes(item.unit as UnitOfMeasurement)) {
       setUnit(item.unit as UnitOfMeasurement);
     }
+    setNameError(null);
   };
 
   const handleSave = async () => {
@@ -223,6 +329,25 @@ export default function NewProductScreen() {
       toast.warning('Price Margin Notice', `Selling price (₱${sellingNum.toFixed(2)}) is less than cost (₱${costNum.toFixed(2)}). Saving item...`);
     }
 
+    // Check for duplicate name in database
+    const isDupName = await ProductRepository.isNameDuplicate(trimmedName);
+    if (isDupName) {
+      setNameError(`A product named "${trimmedName}" already exists.`);
+      toast.error('Duplicate Product', `A product with the name "${trimmedName}" already exists in your inventory.`);
+      return;
+    }
+
+    // Check for duplicate barcode if barcode is entered
+    const trimmedBarcode = barcode.trim();
+    if (trimmedBarcode) {
+      const isDupBarcode = await ProductRepository.isBarcodeDuplicate(trimmedBarcode);
+      if (isDupBarcode) {
+        setBarcodeError(`Barcode "${trimmedBarcode}" is already assigned to another product.`);
+        toast.error('Duplicate Barcode', `Barcode "${trimmedBarcode}" already belongs to an existing product.`);
+        return;
+      }
+    }
+
     await submitProduct();
   };
 
@@ -245,6 +370,50 @@ export default function NewProductScreen() {
         unit,
         minimum_stock: minStock,
       });
+
+      // Handle batch receipt items if currently active
+      if (receiptScanResult && receiptScanResult.items && receiptScanResult.items.length > 0) {
+        const remaining = receiptScanResult.items.filter(
+          (it) => it.id !== activeScannedItemId && it.name.trim().toLowerCase() !== name.trim().toLowerCase()
+        );
+
+        if (remaining.length > 0) {
+          setReceiptScanResult({ ...receiptScanResult, items: remaining });
+          setName('');
+          setBarcode('');
+          setCostPriceStr('');
+          setSellingPriceStr('');
+          setStockStr('0');
+          setCategory('General');
+          setCustomCategory('');
+          setActiveScannedItemId(null);
+          setNameError(null);
+          setBarcodeError(null);
+
+          toast.success(
+            'Product Saved!',
+            `"${name.trim()}" saved. ${remaining.length} item${remaining.length === 1 ? '' : 's'} remaining in receipt batch.`
+          );
+
+          // Return to receipt review modal so user can proceed with next item
+          setTimeout(() => {
+            setShowReceiptReview(true);
+          }, 350);
+          return;
+        } else {
+          setReceiptScanResult(null);
+          setActiveScannedItemId(null);
+          toast.success('Batch Complete!', `All items from the receipt have been added to your inventory.`);
+          setTimeout(() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace('/inventory');
+            }
+          }, 700);
+          return;
+        }
+      }
 
       toast.success('Product Added!', `"${name.trim()}" has been saved to your inventory.`);
       setTimeout(() => {
@@ -279,6 +448,79 @@ export default function NewProductScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+          {/* Persistent Scanned Batch Banner */}
+          {receiptScanResult && receiptScanResult.items && receiptScanResult.items.length > 0 && (
+            <View style={styles.scannedBatchBanner}>
+              <View style={styles.scannedBatchHeader}>
+                <View style={styles.scannedBatchBadge}>
+                  <FontAwesome5 name="receipt" size={12} color="#059669" />
+                  <Text style={styles.scannedBatchBadgeText}>
+                    SCANNED RECEIPT ({receiptScanResult.items.length} {receiptScanResult.items.length === 1 ? 'ITEM' : 'ITEMS'})
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    Alert.alert(
+                      'Discard Receipt Items?',
+                      'Are you sure you want to discard the remaining items from this scanned receipt?',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Discard',
+                          style: 'destructive',
+                          onPress: () => {
+                            setReceiptScanResult(null);
+                            setActiveScannedItemId(null);
+                            toast.info('Batch Discarded', 'Receipt items cleared.');
+                          },
+                        },
+                      ]
+                    );
+                  }}
+                  hitSlop={8}
+                >
+                  <Text style={styles.scannedBatchDiscardText}>Discard Batch</Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.scannedBatchDescription}>
+                {activeScannedItemId
+                  ? `Editing "${name || 'item'}" from ${receiptScanResult.storeName || 'receipt'}. Other scanned items are saved.`
+                  : `${receiptScanResult.items.length} items parsed from ${receiptScanResult.storeName || 'receipt'}.`}
+              </Text>
+
+              <View style={styles.scannedBatchActionsRow}>
+                <Pressable
+                  onPress={() => setShowReceiptReview(true)}
+                  style={({ pressed }) => [styles.openBatchButton, pressed && { opacity: 0.85 }]}
+                >
+                  <FontAwesome5 name="list-ul" size={13} color="#ffffff" />
+                  <Text style={styles.openBatchButtonText}>
+                    Return to Scanned Items ({receiptScanResult.items.length})
+                  </Text>
+                </Pressable>
+
+                {activeScannedItemId && (
+                  <Pressable
+                    onPress={() => {
+                      const currentIndex = receiptScanResult.items.findIndex((it) => it.id === activeScannedItemId);
+                      const nextIndex = (currentIndex + 1) % receiptScanResult.items.length;
+                      const nextItem = receiptScanResult.items[nextIndex];
+                      if (nextItem) {
+                        handleApplySingleItem(nextItem);
+                        toast.info('Switched Item', `Loaded "${nextItem.name}" into form.`);
+                      }
+                    }}
+                    style={({ pressed }) => [styles.nextItemButton, pressed && { opacity: 0.85 }]}
+                  >
+                    <FontAwesome5 name="step-forward" size={11} color="#059669" />
+                    <Text style={styles.nextItemButtonText}>Next Item</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          )}
+
           {/* AI Receipt Intake Card */}
           <View style={styles.aiReceiptCard}>
             <View style={styles.aiReceiptHeader}>
@@ -286,30 +528,94 @@ export default function NewProductScreen() {
                 <FontAwesome5 name="magic" size={14} color="#ffffff" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.aiReceiptTitle}>AI Receipt Scanner & Auto-Fill</Text>
+                <Text style={styles.aiReceiptTitle}>AI Receipt Scanner & Queuing</Text>
                 <Text style={styles.aiReceiptSub}>
-                  Take a photo or insert a receipt file to auto-extract items, quantities, and wholesale costs.
+                  Take or insert multiple receipt photos in queue, then extract all items at once.
                 </Text>
               </View>
             </View>
 
-            <View style={styles.aiReceiptButtonsRow}>
-              <Pressable
-                onPress={handleTakeReceiptPhoto}
-                style={({ pressed }) => [styles.aiActionButton, styles.cameraButton, pressed && { opacity: 0.85 }]}
-              >
-                <FontAwesome5 name="camera" size={13} color="#ffffff" />
-                <Text style={styles.aiActionButtonText}>Take Photo</Text>
-              </Pressable>
+            {/* If there are queued photos, show queue preview list */}
+            {imageQueue.length > 0 ? (
+              <View style={styles.queueContainer}>
+                <View style={styles.queueHeaderRow}>
+                  <Text style={styles.queueTitle}>
+                    Queued Photos ({imageQueue.length})
+                  </Text>
+                  <Pressable onPress={handleClearQueue} hitSlop={8}>
+                    <Text style={styles.clearQueueText}>Clear All</Text>
+                  </Pressable>
+                </View>
 
-              <Pressable
-                onPress={handlePickReceiptFile}
-                style={({ pressed }) => [styles.aiActionButton, styles.uploadButton, pressed && { opacity: 0.85 }]}
-              >
-                <FontAwesome5 name="file-image" size={13} color="#059669" />
-                <Text style={[styles.aiActionButtonText, { color: '#059669' }]}>Insert File</Text>
-              </Pressable>
-            </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.queueThumbnailsRow}
+                >
+                  {imageQueue.map((item, idx) => (
+                    <View key={item.id} style={styles.queueThumbnailBox}>
+                      <Image source={{ uri: item.uri }} style={styles.queueThumbnailImage} />
+                      <View style={styles.queueBadge}>
+                        <Text style={styles.queueBadgeText}>#{idx + 1}</Text>
+                      </View>
+                      <Pressable
+                        onPress={() => handleRemoveQueuedImage(item.id)}
+                        style={styles.queueDeleteBtn}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="close-circle" size={20} color="#ef4444" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+
+                <View style={styles.queueActionsRow}>
+                  <Pressable
+                    onPress={handleTakeReceiptPhoto}
+                    style={({ pressed }) => [styles.queueAddMoreBtn, pressed && { opacity: 0.8 }]}
+                  >
+                    <FontAwesome5 name="camera" size={12} color="#059669" />
+                    <Text style={styles.queueAddMoreText}>+ Camera</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={handlePickReceiptFile}
+                    style={({ pressed }) => [styles.queueAddMoreBtn, pressed && { opacity: 0.8 }]}
+                  >
+                    <FontAwesome5 name="plus" size={12} color="#059669" />
+                    <Text style={styles.queueAddMoreText}>+ Photos</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={handleProcessQueue}
+                    style={({ pressed }) => [styles.queueExtractBtn, pressed && { opacity: 0.9 }]}
+                  >
+                    <FontAwesome5 name="magic" size={13} color="#ffffff" />
+                    <Text style={styles.queueExtractBtnText}>
+                      Extract All ({imageQueue.length})
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.aiReceiptButtonsRow}>
+                <Pressable
+                  onPress={handleTakeReceiptPhoto}
+                  style={({ pressed }) => [styles.aiActionButton, styles.cameraButton, pressed && { opacity: 0.85 }]}
+                >
+                  <FontAwesome5 name="camera" size={13} color="#ffffff" />
+                  <Text style={styles.aiActionButtonText}>Snap Photo</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={handlePickReceiptFile}
+                  style={({ pressed }) => [styles.aiActionButton, styles.uploadButton, pressed && { opacity: 0.85 }]}
+                >
+                  <FontAwesome5 name="images" size={13} color="#059669" />
+                  <Text style={[styles.aiActionButtonText, { color: '#059669' }]}>Insert Photos</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
           {/* Card 1: Product Name */}
           <View style={styles.card}>
@@ -321,12 +627,22 @@ export default function NewProductScreen() {
             </View>
             <TextInput
               value={name}
-              onChangeText={setName}
+              onChangeText={(text) => {
+                setName(text);
+                if (nameError) setNameError(null);
+              }}
+              onBlur={() => checkNameDuplicate(name)}
               placeholder="Enter product name"
               placeholderTextColor="#94a3b8"
-              style={styles.input}
+              style={[styles.input, nameError ? styles.inputError : null]}
               autoFocus={!params.barcode}
             />
+            {nameError ? (
+              <View style={styles.duplicateWarningRow}>
+                <FontAwesome5 name="exclamation-circle" size={12} color="#dc2626" style={{ marginRight: 6 }} />
+                <Text style={styles.duplicateWarningText}>{nameError}</Text>
+              </View>
+            ) : null}
           </View>
 
           {/* Card 2: Barcode */}
@@ -341,11 +657,15 @@ export default function NewProductScreen() {
             <View style={styles.barcodeRow}>
               <TextInput
                 value={barcode}
-                onChangeText={setBarcode}
+                onChangeText={(text) => {
+                  setBarcode(text);
+                  if (barcodeError) setBarcodeError(null);
+                }}
+                onBlur={() => checkBarcodeDuplicate(barcode)}
                 placeholder="e.g. 4800016644819"
                 placeholderTextColor="#94a3b8"
                 keyboardType="number-pad"
-                style={[styles.input, styles.monoInput, styles.barcodeInput]}
+                style={[styles.input, styles.monoInput, styles.barcodeInput, barcodeError ? styles.inputError : null]}
               />
               <Pressable
                 onPress={() => setShowScanner(true)}
@@ -355,7 +675,13 @@ export default function NewProductScreen() {
                 <Text style={styles.scanButtonText}>Scan</Text>
               </Pressable>
             </View>
-            {barcode ? (
+            {barcodeError ? (
+              <View style={styles.duplicateWarningRow}>
+                <FontAwesome5 name="exclamation-circle" size={12} color="#dc2626" style={{ marginRight: 6 }} />
+                <Text style={styles.duplicateWarningText}>{barcodeError}</Text>
+              </View>
+            ) : null}
+            {barcode && !barcodeError ? (
               <View style={styles.scannedNoticeRow}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                   <FontAwesome5 name="check-circle" size={11} color="#059669" style={{ marginRight: 5 }} />
@@ -363,7 +689,7 @@ export default function NewProductScreen() {
                     Code ready: {barcode}
                   </Text>
                 </View>
-                <Pressable onPress={() => setBarcode('')} hitSlop={8}>
+                <Pressable onPress={() => { setBarcode(''); setBarcodeError(null); }} hitSlop={8}>
                   <Text style={styles.clearBarcodeText}>Clear</Text>
                 </Pressable>
               </View>
@@ -540,6 +866,7 @@ export default function NewProductScreen() {
         onScan={(scannedCode, type) => {
           setBarcode(scannedCode);
           toast.success('Code Scanned!', `${scannedCode} (${type.toUpperCase()})`);
+          checkBarcodeDuplicate(scannedCode);
         }}
         title="Scan Barcode / QR Code"
       />
@@ -551,7 +878,9 @@ export default function NewProductScreen() {
             <View style={styles.scanningIconCircle}>
               <ActivityIndicator size="large" color="#059669" />
             </View>
-            <Text style={styles.scanningModalTitle}>AI Reading Receipt...</Text>
+            <Text style={styles.scanningModalTitle}>
+              {imageQueue.length > 1 ? `AI Reading ${imageQueue.length} Photos...` : 'AI Reading Receipt...'}
+            </Text>
             <Text style={styles.scanningModalSub}>
               Detecting item names, quantities, and wholesale costs with Gemini. Please wait a moment.
             </Text>
@@ -564,8 +893,14 @@ export default function NewProductScreen() {
         visible={showReceiptReview}
         onClose={() => setShowReceiptReview(false)}
         scanResult={receiptScanResult}
+        activeItemId={activeScannedItemId}
         onApplySingleItem={handleApplySingleItem}
+        onUpdateItems={(updated) => {
+          setReceiptScanResult((prev) => (prev ? { ...prev, items: updated } : null));
+        }}
         onBatchSaved={(count) => {
+          setReceiptScanResult(null);
+          setActiveScannedItemId(null);
           toast.success('Inventory Updated', `${count} items added to inventory.`);
           setTimeout(() => {
             if (router.canGoBack()) {
@@ -724,6 +1059,27 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     fontWeight: '500',
   },
+  inputError: {
+    borderColor: '#ef4444',
+    backgroundColor: '#fef2f2',
+  },
+  duplicateWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  duplicateWarningText: {
+    fontSize: 12,
+    color: '#b91c1c',
+    fontWeight: '600',
+    flex: 1,
+  },
   monoInput: {
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     letterSpacing: 1,
@@ -881,6 +1237,187 @@ const styles = StyleSheet.create({
     color: '#64748b',
     textAlign: 'center',
     lineHeight: 18,
+  },
+  scannedBatchBanner: {
+    backgroundColor: '#ecfdf5',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1.5,
+    borderColor: '#a7f3d0',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  scannedBatchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  scannedBatchBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#d1fae5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  scannedBatchBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#065f46',
+    letterSpacing: 0.4,
+  },
+  scannedBatchDiscardText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ef4444',
+    textDecorationLine: 'underline',
+  },
+  scannedBatchDescription: {
+    fontSize: 13,
+    color: '#047857',
+    fontWeight: '500',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  scannedBatchActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  openBatchButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#059669',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  openBatchButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  nextItemButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#059669',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  nextItemButtonText: {
+    color: '#059669',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  queueContainer: {
+    marginTop: 4,
+  },
+  queueHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  queueTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  clearQueueText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#ef4444',
+    textDecorationLine: 'underline',
+  },
+  queueThumbnailsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  queueThumbnailBox: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    overflow: 'hidden',
+  },
+  queueThumbnailImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 9,
+  },
+  queueBadge: {
+    position: 'absolute',
+    bottom: 3,
+    left: 3,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  queueBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  queueDeleteBtn: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+  },
+  queueActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  queueAddMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#059669',
+  },
+  queueAddMoreText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  queueExtractBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#059669',
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  queueExtractBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });
 

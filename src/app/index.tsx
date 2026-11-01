@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { DashboardRepository } from "@/database/repositories/dashboard-repository";
 import { ProductRepository } from "@/database/repositories/product-repository";
+import { supabase } from "@/lib/supabase";
 import {
   type DashboardPeriod,
   type DashboardSummary,
@@ -12,8 +13,7 @@ import {
 import { formatPHP } from "@/utils/currency";
 import { FontAwesome, FontAwesome5 } from "@expo/vector-icons";
 import { router, Stack, useFocusEffect } from "expo-router";
-import { supabase } from "@/lib/supabase";
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -22,7 +22,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function DashboardScreen() {
   const toast = useToast();
@@ -38,9 +37,9 @@ export default function DashboardScreen() {
   const fetchStoreName = async (): Promise<string> => {
     try {
       const { data } = await supabase
-        .from('store_settings')
-        .select('value')
-        .eq('key', 'store_name')
+        .from("store_settings")
+        .select("value")
+        .eq("key", "store_name")
         .maybeSingle();
       return data?.value || "My Sari-Sari Store";
     } catch {
@@ -71,7 +70,7 @@ export default function DashboardScreen() {
         if (showLoading) setLoading(false);
       }
     },
-    [period]
+    [period],
   );
 
   useEffect(() => {
@@ -87,7 +86,7 @@ export default function DashboardScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchDashboardDataRef.current(false);
-    }, [])
+    }, []),
   );
 
   // Supabase Real-time Channel for Sales, Products, Inventory, Utang, Payments & Expenses
@@ -100,70 +99,70 @@ export default function DashboardScreen() {
         { event: "*", schema: "public", table: "sales" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "sale_items" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "products" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "stock_movements" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "customers" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "credit_transactions" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "credit_transaction_items" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "customer_payments" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "expenses" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "store_settings" },
         () => {
           fetchDashboardDataRef.current(false);
-        }
+        },
       )
       .subscribe();
 
@@ -183,13 +182,90 @@ export default function DashboardScreen() {
   );
   const outOfStockProducts = products.filter((p) => p.stock_quantity <= 0);
 
-
   const periodLabel =
     period === "today"
       ? "Today"
       : period === "week"
         ? "This Week"
         : "This Month";
+
+  const renderDashboardSkeleton = () => (
+    <View style={styles.skeletonContainer}>
+      <Skeleton width={130} height={18} borderRadius={4} style={{ marginBottom: 12 }} />
+      <View style={styles.actionsGrid}>
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <View key={i} style={styles.actionCardSkeleton}>
+            <Skeleton width={36} height={36} borderRadius={10} style={{ marginBottom: 8 }} />
+            <Skeleton width="75%" height={15} borderRadius={4} style={{ marginBottom: 6 }} />
+            <Skeleton width="50%" height={12} borderRadius={4} />
+          </View>
+        ))}
+      </View>
+
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <Skeleton width={140} height={14} borderRadius={4} />
+        <Skeleton width={160} height={32} borderRadius={10} />
+      </View>
+
+      <View style={[styles.card, { padding: 18, marginBottom: 16 }]}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <View>
+            <Skeleton width={130} height={14} borderRadius={4} style={{ marginBottom: 8 }} />
+            <Skeleton width={180} height={34} borderRadius={8} />
+          </View>
+          <Skeleton width={80} height={24} borderRadius={14} />
+        </View>
+        <View style={{ flexDirection: "row", gap: 12 }}>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 12, borderRadius: 10 }}>
+            <Skeleton width={75} height={12} borderRadius={4} style={{ marginBottom: 6 }} />
+            <Skeleton width={95} height={20} borderRadius={6} />
+          </View>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 12, borderRadius: 10 }}>
+            <Skeleton width={75} height={12} borderRadius={4} style={{ marginBottom: 6 }} />
+            <Skeleton width={95} height={20} borderRadius={6} />
+          </View>
+        </View>
+      </View>
+
+      <View style={[styles.card, { padding: 16, marginBottom: 16 }]}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 14 }}>
+          <Skeleton width={150} height={18} borderRadius={4} />
+          <Skeleton width={70} height={14} borderRadius={4} />
+        </View>
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 10, borderRadius: 8 }}>
+            <Skeleton width={80} height={12} borderRadius={4} style={{ marginBottom: 6 }} />
+            <Skeleton width={90} height={18} borderRadius={4} />
+          </View>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 10, borderRadius: 8 }}>
+            <Skeleton width={80} height={12} borderRadius={4} style={{ marginBottom: 6 }} />
+            <Skeleton width={90} height={18} borderRadius={4} />
+          </View>
+        </View>
+      </View>
+
+      <View style={[styles.card, { padding: 16 }]}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <Skeleton width={160} height={16} borderRadius={4} />
+          <Skeleton width={120} height={24} borderRadius={6} />
+        </View>
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 10, borderRadius: 8 }}>
+            <Skeleton width={40} height={18} borderRadius={4} style={{ marginBottom: 4 }} />
+            <Skeleton width={60} height={12} borderRadius={4} />
+          </View>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 10, borderRadius: 8 }}>
+            <Skeleton width={40} height={18} borderRadius={4} style={{ marginBottom: 4 }} />
+            <Skeleton width={60} height={12} borderRadius={4} />
+          </View>
+          <View style={{ flex: 1, backgroundColor: "#f8fafc", padding: 10, borderRadius: 8 }}>
+            <Skeleton width={40} height={18} borderRadius={4} style={{ marginBottom: 4 }} />
+            <Skeleton width={60} height={12} borderRadius={4} />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
 
   return (
     <>
@@ -207,141 +283,137 @@ export default function DashboardScreen() {
             />
           }
         >
-          {/* Header */}
-          <View style={styles.header}>
-            <View>
-              <View style={styles.badgeRow}>
-                <FontAwesome5 name="store" size={12} color="#059669" />
-                <Text style={styles.badgeText}>Sari-Sari Store POS</Text>
-              </View>
-              <Text style={styles.storeName}>{storeName}</Text>
-            </View>
-          </View>
-
-          {/* Quick Actions */}
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.actionsGrid}>
-            {/* Sell (Export) POS Card */}
-            <Pressable
-              onPress={() => router.push("/pos")}
-              style={({ pressed }) => [
-                styles.actionCardEmerald,
-                pressed && styles.cardPressed,
-              ]}
-            >
-              <View style={styles.actionIconBoxWhite}>
-                <FontAwesome5 name="cash-register" size={16} color="#059669" />
-              </View>
-              <Text style={styles.actionCardTitleWhite}>Sell (Export)</Text>
-              <Text style={styles.actionCardSubtitleWhite}>POS Checkout</Text>
-            </Pressable>
-
-            {/* Customer Utang Card */}
-            <Pressable
-              onPress={() => router.push("/utang/index")}
-              style={({ pressed }) => [
-                styles.actionCardWhite,
-                pressed && styles.cardPressed,
-              ]}
-            >
-              <View style={styles.actionIconBoxRose}>
-                <FontAwesome5 name="book-open" size={18} color="#be123c" />
-              </View>
-              <Text style={styles.actionCardTitle}>Customer Utang</Text>
-              {loading ? (
-                <Skeleton
-                  width={70}
-                  height={16}
-                  borderRadius={4}
-                  style={{ marginTop: 2 }}
-                />
-              ) : (
-                <Text
-                  style={[
-                    styles.actionCardSubtitle,
-                    { color: "#be123c", fontWeight: "700" },
+          {loading && !summary ? (
+            renderDashboardSkeleton()
+          ) : (
+            <>
+              {/* Quick Actions */}
+              <Text style={styles.sectionTitle}>Quick Actions</Text>
+              <View style={styles.actionsGrid}>
+                {/* Sell (Export) POS Card */}
+                <Pressable
+                  onPress={() => router.push("/pos")}
+                  style={({ pressed }) => [
+                    styles.actionCardBase,
+                    styles.actionCardEmerald,
+                    pressed && styles.cardPressed,
                   ]}
                 >
-                  {summary ? formatPHP(summary.totalOutstandingUtang) : "₱0.00"}
-                </Text>
-              )}
-            </Pressable>
+                  <View style={styles.actionIconBoxEmerald}>
+                    <FontAwesome5 name="cash-register" size={16} color="#059669" />
+                  </View>
+                  <Text style={styles.actionCardTitleEmerald}>Sell (Export)</Text>
+                  <Text style={styles.actionCardSubtitleEmerald}>POS Checkout</Text>
+                </Pressable>
 
-            {/* Inventory Card */}
-            <Pressable
-              onPress={() => router.push("/inventory")}
-              style={({ pressed }) => [
-                styles.actionCardWhite,
-                pressed && styles.cardPressed,
-              ]}
-            >
-              <View style={styles.actionIconBoxEmerald}>
-                <FontAwesome5 name="boxes" size={18} color="#059669" />
-              </View>
-              <Text style={styles.actionCardTitle}>Inventory</Text>
-              {loading ? (
-                <Skeleton
-                  width={70}
-                  height={16}
-                  borderRadius={4}
-                  style={{ marginTop: 2 }}
-                />
-              ) : (
-                <Text style={styles.actionCardSubtitle}>
-                  {totalProducts} Products
-                </Text>
-              )}
-            </Pressable>
+                {/* Utang Card */}
+                <Pressable
+                  onPress={() => router.push("/utang/index")}
+                  style={({ pressed }) => [
+                    styles.actionCardBase,
+                    styles.actionCardRose,
+                    pressed && styles.cardPressed,
+                  ]}
+                >
+                  <View style={styles.actionIconBoxRose}>
+                    <FontAwesome5 name="book-open" size={16} color="#be123c" />
+                  </View>
+                  <Text style={styles.actionCardTitleRose}>Utang</Text>
+                  {loading ? (
+                    <Skeleton
+                      width={70}
+                      height={16}
+                      borderRadius={4}
+                      style={{ marginTop: 2 }}
+                    />
+                  ) : (
+                    <Text style={styles.actionCardSubtitleRose}>
+                      {summary ? formatPHP(summary.totalOutstandingUtang) : "₱0.00"}
+                    </Text>
+                  )}
+                </Pressable>
 
-            {/* Add Product Card */}
-            <Pressable
-              onPress={() => router.push("/products/new")}
-              style={({ pressed }) => [
-                styles.actionCardWhite,
-                pressed && styles.cardPressed,
-              ]}
-            >
-              <View style={styles.actionIconBoxBlue}>
-                <FontAwesome5 name="plus" size={16} color="#2563eb" />
-              </View>
-              <Text style={styles.actionCardTitle}>Add Product</Text>
-              <Text style={styles.actionCardSubtitle}>New Item</Text>
-            </Pressable>
+                {/* Inventory Card */}
+                <Pressable
+                  onPress={() => router.push("/inventory")}
+                  style={({ pressed }) => [
+                    styles.actionCardBase,
+                    styles.actionCardGreen,
+                    pressed && styles.cardPressed,
+                  ]}
+                >
+                  <View style={styles.actionIconBoxGreen}>
+                    <FontAwesome5 name="boxes" size={16} color="#16a34a" />
+                  </View>
+                  <Text style={styles.actionCardTitleGreen}>Inventory</Text>
+                  {loading ? (
+                    <Skeleton
+                      width={70}
+                      height={16}
+                      borderRadius={4}
+                      style={{ marginTop: 2 }}
+                    />
+                  ) : (
+                    <Text style={styles.actionCardSubtitleGreen}>
+                      {totalProducts} Products
+                    </Text>
+                  )}
+                </Pressable>
 
-            {/* Record Utang Card */}
-            <Pressable
-              onPress={() => router.push("/utang/new")}
-              style={({ pressed }) => [
-                styles.actionCardWhite,
-                pressed && styles.cardPressed,
-              ]}
-            >
-              <View style={styles.actionIconBoxRose}>
-                <FontAwesome5
-                  name="hand-holding-usd"
-                  size={16}
-                  color="#be123c"
-                />
-              </View>
-              <Text style={styles.actionCardTitle}>New Utang</Text>
-              <Text style={styles.actionCardSubtitle}>Record Credit</Text>
-            </Pressable>
+                {/* Add Product Card */}
+                <Pressable
+                  onPress={() => router.push("/products/new")}
+                  style={({ pressed }) => [
+                    styles.actionCardBase,
+                    styles.actionCardBlue,
+                    pressed && styles.cardPressed,
+                  ]}
+                >
+                  <View style={styles.actionIconBoxBlue}>
+                    <FontAwesome5 name="plus" size={15} color="#2563eb" />
+                  </View>
+                  <Text style={styles.actionCardTitleBlue}>Add Product</Text>
+                  <Text style={styles.actionCardSubtitleBlue}>New Item</Text>
+                </Pressable>
 
-            {/* Overview & Charts Card */}
-            <Pressable
-              onPress={() => router.push("/overview")}
-              style={({ pressed }) => [
-                styles.actionCardWhite,
-                pressed && styles.cardPressed,
-              ]}
-            >
-              <View style={styles.actionIconBoxEmerald}>
-                <FontAwesome5 name="chart-line" size={16} color="#059669" />
+                {/* Record Utang Card */}
+                <Pressable
+                  onPress={() => router.push("/utang/new")}
+                  style={({ pressed }) => [
+                    styles.actionCardBase,
+                    styles.actionCardPurple,
+                    pressed && styles.cardPressed,
+                  ]}
+                >
+                  <View style={styles.actionIconBoxPurple}>
+                    <FontAwesome5
+                      name="hand-holding-usd"
+                      size={16}
+                      color="#7c3aed"
+                    />
+                  </View>
+                  <Text style={styles.actionCardTitlePurple}>New Utang</Text>
+                  <Text style={styles.actionCardSubtitlePurple}>Record Credit</Text>
+                </Pressable>
+
+                {/* Overview & Charts Card */}
+                <Pressable
+                  onPress={() => router.push("/overview")}
+                  style={({ pressed }) => [
+                    styles.actionCardBase,
+                    styles.actionCardIndigo,
+                    pressed && styles.cardPressed,
+                  ]}
+                >
+                  <View style={styles.actionIconBoxIndigo}>
+                    <FontAwesome5 name="chart-line" size={16} color="#4f46e5" />
+                  </View>
+                  <Text style={styles.actionCardTitleIndigo}>Overview & Charts</Text>
+                  <Text style={styles.actionCardSubtitleIndigo}>
+                    Capital, Loss & Profit
+                  </Text>
+                </Pressable>
               </View>
-              <Text style={styles.actionCardTitle}>Overview & Charts</Text>
-              <Text style={styles.actionCardSubtitle}>Capital, Loss & Profit</Text>
-            </Pressable>
-          </View>
 
           {/* Period Selector Filter */}
           <View style={styles.periodFilterRow}>
@@ -711,12 +783,6 @@ export default function DashboardScreen() {
             <View style={styles.capitalRow}>
               <View>
                 <View style={styles.capitalLabelRow}>
-                  <FontAwesome5
-                    name="chart-pie"
-                    size={13}
-                    color="#059669"
-                    style={{ marginRight: 6 }}
-                  />
                   <Text style={styles.capitalLabel}>
                     Total Inventory Capital
                   </Text>
@@ -917,7 +983,8 @@ export default function DashboardScreen() {
               </View>
               <Text style={styles.emptyTitle}>Your Store is Ready!</Text>
               <Text style={styles.emptySubtitle}>
-                Your store inventory is empty. Add your products to start selling and tracking sales.
+                Your store inventory is empty. Add your products to start
+                selling and tracking sales.
               </Text>
 
               <AppButton
@@ -928,6 +995,8 @@ export default function DashboardScreen() {
                 style={{ width: "100%" }}
               />
             </View>
+          )}
+            </>
           )}
         </ScrollView>
       </AppLayout>
@@ -1001,37 +1070,58 @@ const styles = StyleSheet.create({
     color: "#0f172a",
     marginBottom: 10,
   },
+  skeletonContainer: {
+    paddingBottom: 24,
+  },
   actionsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
+    justifyContent: "space-between",
     gap: 10,
     marginBottom: 16,
   },
-  actionCardWhite: {
-    flex: 1,
-    minWidth: "47%",
-    backgroundColor: "#ffffff",
+  actionCardBase: {
+    width: "48%",
     borderRadius: 14,
-    padding: 14,
+    padding: 12,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.03,
     shadowRadius: 3,
     elevation: 1,
   },
-  actionCardEmerald: {
-    flex: 1,
-    minWidth: "47%",
-    backgroundColor: "#059669",
+  actionCardSkeleton: {
+    width: "48%",
+    backgroundColor: "#ffffff",
     borderRadius: 14,
-    padding: 14,
-    shadowColor: "#059669",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 2,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  actionCardEmerald: {
+    backgroundColor: "#ecfdf5",
+    borderColor: "#a7f3d0",
+  },
+  actionCardRose: {
+    backgroundColor: "#fff1f2",
+    borderColor: "#fecdd3",
+  },
+  actionCardGreen: {
+    backgroundColor: "#f0fdf4",
+    borderColor: "#bbf7d0",
+  },
+  actionCardBlue: {
+    backgroundColor: "#eff6ff",
+    borderColor: "#bfdbfe",
+  },
+  actionCardPurple: {
+    backgroundColor: "#faf5ff",
+    borderColor: "#e9d5ff",
+  },
+  actionCardIndigo: {
+    backgroundColor: "#eef2ff",
+    borderColor: "#c7d2fe",
   },
   cardPressed: {
     opacity: 0.85,
@@ -1041,7 +1131,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "#fff1f2",
+    backgroundColor: "#ffe4e6",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
@@ -1050,7 +1140,16 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "#ecfdf5",
+    backgroundColor: "#d1fae5",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  actionIconBoxGreen: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#dcfce7",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
@@ -1059,39 +1158,94 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "#eff6ff",
+    backgroundColor: "#dbeafe",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
   },
-  actionIconBoxWhite: {
+  actionIconBoxPurple: {
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "#ffffff",
+    backgroundColor: "#f3e8ff",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
   },
-  actionCardTitle: {
+  actionIconBoxIndigo: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#e0e7ff",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  actionCardTitleEmerald: {
     fontSize: 14,
     fontWeight: "800",
-    color: "#0f172a",
+    color: "#065f46",
   },
-  actionCardSubtitle: {
-    fontSize: 12,
-    color: "#64748b",
+  actionCardSubtitleEmerald: {
+    fontSize: 11,
+    color: "#047857",
     marginTop: 2,
+    fontWeight: "600",
   },
-  actionCardTitleWhite: {
+  actionCardTitleRose: {
     fontSize: 14,
     fontWeight: "800",
-    color: "#ffffff",
+    color: "#881337",
   },
-  actionCardSubtitleWhite: {
-    fontSize: 12,
-    color: "#d1fae5",
+  actionCardSubtitleRose: {
+    fontSize: 11,
+    color: "#be123c",
     marginTop: 2,
+    fontWeight: "700",
+  },
+  actionCardTitleGreen: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#14532d",
+  },
+  actionCardSubtitleGreen: {
+    fontSize: 11,
+    color: "#15803d",
+    marginTop: 2,
+    fontWeight: "500",
+  },
+  actionCardTitleBlue: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#1e3a8a",
+  },
+  actionCardSubtitleBlue: {
+    fontSize: 11,
+    color: "#1d4ed8",
+    marginTop: 2,
+    fontWeight: "500",
+  },
+  actionCardTitlePurple: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#581c87",
+  },
+  actionCardSubtitlePurple: {
+    fontSize: 11,
+    color: "#7e22ce",
+    marginTop: 2,
+    fontWeight: "500",
+  },
+  actionCardTitleIndigo: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#312e81",
+  },
+  actionCardSubtitleIndigo: {
+    fontSize: 11,
+    color: "#4338ca",
+    marginTop: 2,
+    fontWeight: "500",
   },
   periodFilterRow: {
     flexDirection: "row",

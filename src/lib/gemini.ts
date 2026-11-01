@@ -29,10 +29,18 @@ const DEFAULT_CATEGORIES = [
   "General",
 ];
 
-export async function parseReceiptWithGemini(
-  base64Image: string,
-  mimeType: string = "image/jpeg",
+export interface ReceiptImageInput {
+  base64: string;
+  mimeType?: string;
+}
+
+export async function parseReceiptsWithGemini(
+  images: ReceiptImageInput[],
 ): Promise<ReceiptScanResult> {
+  if (!images || images.length === 0) {
+    return { items: [] };
+  }
+
   const apiKey =
     process.env.EXPO_PUBLIC_GEMINI_API_KEY ||
     process.env.GEMINI_SUPPLYCHAIN_API_KEY;
@@ -48,11 +56,9 @@ export async function parseReceiptWithGemini(
     process.env.GEMINI_SUPPLYCHAIN_MODEL ||
     "gemini-3.5-flash-lite";
 
-  const cleanBase64 = base64Image.replace(/^data:image\/[a-z]+;base64,/, "");
-
   const prompt = `You are an expert grocery and sari-sari store receipt OCR reader.
-Carefully examine this receipt image (note: it may be rotated or angled).
-Read every purchased item line, quantity, and unit price.
+Carefully examine the provided receipt image(s) (note: images may be angled, rotated, or multiple pages of a receipt).
+Read every purchased item line, quantity, and unit price across the receipt.
 
 For each item:
 1. "name": Expand abbreviations into clear, customer-friendly product names (e.g. "PIATTOS BBQ 85G" -> "Piattos BBQ 85g", "TOM SWT CRN 110G" -> "Tom's Sweet Corn 110g", "YEN FBCN A.BAC LVNDR 900ML" -> "Yen Fabric Conditioner Anti-Bac Lavender 900ml", "ZON BLCH CLSFE(V) 450ML" -> "Zonrox Bleach Colorsafe 450ml").
@@ -79,6 +85,13 @@ Return ONLY a valid JSON object with this exact schema:
   ]
 }`;
 
+  const imageParts = images.map((img) => ({
+    inline_data: {
+      mime_type: img.mimeType || "image/jpeg",
+      data: img.base64.replace(/^data:image\/[a-z]+;base64,/, ""),
+    },
+  }));
+
   const callModel = async (modelName: string) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
@@ -90,15 +103,7 @@ Return ONLY a valid JSON object with this exact schema:
       body: JSON.stringify({
         contents: [
           {
-            parts: [
-              { text: prompt },
-              {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: cleanBase64,
-                },
-              },
-            ],
+            parts: [{ text: prompt }, ...imageParts],
           },
         ],
         generationConfig: {
@@ -173,3 +178,11 @@ Return ONLY a valid JSON object with this exact schema:
     items,
   };
 }
+
+export async function parseReceiptWithGemini(
+  base64Image: string,
+  mimeType: string = "image/jpeg",
+): Promise<ReceiptScanResult> {
+  return parseReceiptsWithGemini([{ base64: base64Image, mimeType }]);
+}
+

@@ -51,7 +51,7 @@ const NAV_ITEMS: NavItemConfig[] = [
   },
   {
     id: "utang",
-    label: "Customer Utang",
+    label: "Utang",
     route: "/utang/index",
     icon: "book-open",
   },
@@ -178,7 +178,11 @@ export function AppLayout({
           <FontAwesome5 name="store" size={14} color="#059669" />
         </View>
         <View style={styles.menuBarTitleWrap}>
-          <Text style={styles.menuBarTitle} numberOfLines={1}>
+          <Text
+            style={styles.menuBarTitle}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
             {title || "Sari POS"}
           </Text>
         </View>
@@ -497,18 +501,20 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e2e8f0",
   },
   menuBar: {
-    height: 56,
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     backgroundColor: "#ffffff",
   },
   menuBarLeft: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
-    marginRight: 8,
+    flexShrink: 1,
+    marginRight: 6,
+    overflow: "hidden",
   },
   menuBarBrandIcon: {
     width: 28,
@@ -520,34 +526,40 @@ const styles = StyleSheet.create({
     marginRight: 8,
     borderWidth: 1,
     borderColor: "#a7f3d0",
+    flexShrink: 0,
   },
   menuButton: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     borderRadius: 10,
     backgroundColor: "#f1f5f9",
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 8,
+    marginLeft: 6,
+    flexShrink: 0,
   },
   menuButtonPressed: {
     backgroundColor: "#e2e8f0",
   },
   menuBarTitleWrap: {
     flex: 1,
+    flexShrink: 1,
+    justifyContent: "center",
   },
   menuBarTitle: {
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: "800",
     color: "#0f172a",
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
   },
   menuBarRight: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 0,
+    justifyContent: "flex-end",
   },
   menuBarCustomAction: {
-    marginRight: 4,
+    marginRight: 2,
   },
   mobileContentArea: {
     flex: 1,

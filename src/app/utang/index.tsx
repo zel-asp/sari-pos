@@ -9,7 +9,6 @@ import {
   StyleSheet,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { FontAwesome5, FontAwesome } from '@expo/vector-icons';
 import { CustomerRepository } from '@/database/repositories/customer-repository';
 import { supabase } from '@/lib/supabase';
@@ -116,7 +115,7 @@ export default function UtangListScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <AppLayout
         activeTab="utang"
-        title="Customer Utang"
+        title="Utang"
         headerRight={
           <Pressable
             onPress={() => router.push('/utang/new')}

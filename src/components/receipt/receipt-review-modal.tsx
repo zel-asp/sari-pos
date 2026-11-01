@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   StyleSheet,
   Platform,
-  Alert,
 } from 'react-native';
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/components/ui/toast';
@@ -27,6 +26,8 @@ interface ReceiptReviewModalProps {
   scanResult: ReceiptScanResult | null;
   onApplySingleItem: (item: ScannedReceiptItem) => void;
   onBatchSaved: (count: number) => void;
+  onUpdateItems?: (items: ScannedReceiptItem[]) => void;
+  activeItemId?: string | null;
 }
 
 const COMMON_UNITS: UnitOfMeasurement[] = [
@@ -59,21 +60,23 @@ export function ReceiptReviewModal({
   scanResult,
   onApplySingleItem,
   onBatchSaved,
+  onUpdateItems,
+  activeItemId,
 }: ReceiptReviewModalProps) {
   const toast = useToast();
-  const [items, setItems] = useState<ScannedReceiptItem[]>([]);
+  const [items, setItems] = useState<ScannedReceiptItem[]>(() =>
+    scanResult?.items ? JSON.parse(JSON.stringify(scanResult.items)) : []
+  );
+  const [prevScanResult, setPrevScanResult] = useState<ReceiptScanResult | null>(scanResult);
   const [page, setPage] = useState(1);
   const [isSavingAll, setIsSavingAll] = useState(false);
 
-  useEffect(() => {
-    if (scanResult?.items) {
-      setItems(JSON.parse(JSON.stringify(scanResult.items)));
-      setPage(1);
-    } else {
-      setItems([]);
-      setPage(1);
-    }
-  }, [scanResult]);
+  // Synchronize items during render if scanResult reference changes
+  if (scanResult !== prevScanResult) {
+    setPrevScanResult(scanResult);
+    setItems(scanResult?.items ? JSON.parse(JSON.stringify(scanResult.items)) : []);
+    setPage(1);
+  }
 
   const paginatedItems = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -81,13 +84,19 @@ export function ReceiptReviewModal({
   }, [items, page]);
 
   const updateItem = (id: string, updates: Partial<ScannedReceiptItem>) => {
-    setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, ...updates } : it))
-    );
+    setItems((prev) => {
+      const updated = prev.map((it) => (it.id === id ? { ...it, ...updates } : it));
+      onUpdateItems?.(updated);
+      return updated;
+    });
   };
 
   const removeItem = (id: string) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
+    setItems((prev) => {
+      const updated = prev.filter((it) => it.id !== id);
+      onUpdateItems?.(updated);
+      return updated;
+    });
   };
 
   const calculateTotalCost = () => {
@@ -161,7 +170,10 @@ export function ReceiptReviewModal({
             ) : null}
           </View>
           <Pressable onPress={onClose} style={styles.closeButton}>
-            <Ionicons name="close" size={24} color="#64748b" />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.backToFormText}>Back to Form</Text>
+              <Ionicons name="close" size={20} color="#64748b" />
+            </View>
           </Pressable>
         </View>
 
@@ -193,18 +205,29 @@ export function ReceiptReviewModal({
             const cost = item.costPrice || 0;
             const selling = item.sellingPrice || 0;
             const margin = cost > 0 ? (((selling - cost) / cost) * 100).toFixed(0) : '0';
+            const isActive = activeItemId === item.id;
 
             return (
-              <View key={item.id} style={styles.itemCard}>
+              <View key={item.id} style={[styles.itemCard, isActive && styles.itemCardActive]}>
                 {/* Item Card Header */}
                 <View style={styles.cardHeaderRow}>
-                  <View style={styles.itemIndexBadge}>
-                    <Text style={styles.itemIndexText}>{overallIndex + 1}</Text>
+                  <View style={[styles.itemIndexBadge, isActive && styles.itemIndexBadgeActive]}>
+                    <Text style={[styles.itemIndexText, isActive && styles.itemIndexTextActive]}>
+                      {overallIndex + 1}
+                    </Text>
                   </View>
                   <View style={{ flex: 1, marginHorizontal: 8 }}>
-                    <Text style={styles.fieldLabel}>Product Name</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={styles.fieldLabel}>Product Name</Text>
+                      {isActive && (
+                        <View style={styles.activeBadge}>
+                          <FontAwesome5 name="check-circle" size={9} color="#059669" />
+                          <Text style={styles.activeBadgeText}>Loaded in Form</Text>
+                        </View>
+                      )}
+                    </View>
                     <TextInput
-                      style={styles.nameInput}
+                      style={[styles.nameInput, isActive && styles.nameInputActive]}
                       value={item.name}
                       onChangeText={(val) => updateItem(item.id, { name: val })}
                       placeholder="Product name"
@@ -352,10 +375,12 @@ export function ReceiptReviewModal({
                       onClose();
                       toast.info('Applied to Form', `"${item.name}" loaded into product form.`);
                     }}
-                    style={styles.applySingleButton}
+                    style={[styles.applySingleButton, isActive && styles.applySingleButtonActive]}
                   >
-                    <FontAwesome5 name="edit" size={11} color="#059669" />
-                    <Text style={styles.applySingleButtonText}>Fill into Form</Text>
+                    <FontAwesome5 name={isActive ? "check" : "edit"} size={11} color={isActive ? "#ffffff" : "#059669"} />
+                    <Text style={[styles.applySingleButtonText, isActive && styles.applySingleButtonTextActive]}>
+                      {isActive ? 'Loaded in Form' : 'Fill into Form'}
+                    </Text>
                   </Pressable>
                 </View>
               </View>
@@ -456,9 +481,53 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   closeButton: {
-    padding: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
+  },
+  backToFormText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  itemCardActive: {
+    borderColor: '#059669',
+    borderWidth: 2,
+    backgroundColor: '#f0fdf4',
+  },
+  itemIndexBadgeActive: {
+    backgroundColor: '#059669',
+  },
+  itemIndexTextActive: {
+    color: '#ffffff',
+  },
+  activeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#d1fae5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#6ee7b7',
+  },
+  activeBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  nameInputActive: {
+    borderColor: '#059669',
+    backgroundColor: '#ffffff',
+  },
+  applySingleButtonActive: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+  },
+  applySingleButtonTextActive: {
+    color: '#ffffff',
   },
   infoBanner: {
     backgroundColor: '#f0fdf4',
